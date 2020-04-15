@@ -14,6 +14,7 @@ InstNetV2: an CNN framework for instance segmtnation
 - opencv
 - [tfAugmentor](https://github.com/looooongChen/tfAugmentor) (required only if image augmentation function is activated)
 - tqdm
+- numpy
 
 # Usage
 
