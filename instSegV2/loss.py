@@ -18,6 +18,28 @@ def cross_entropy(y_true, y_pred):
     # return the mean loss of each pixel inside the batch
     return tf.reduce_mean(loss)
 
+def dice_loss(y_true, y_pred):
+    '''
+    Inputs:
+        y_true: label map of size B x H x W x 1
+        y_pred: feature map of size B x H x W x C, 'softmax' activated
+    '''
+    y_true_onehot = tf.cast(tf.squeeze(y_true, axis=-1), tf.int32)
+    y_true_onehot = K.cast_to_floatx(K.one_hot(y_true_onehot, y_pred.shape[-1]))
+    y_pred = K.cast_to_floatx(y_pred)
+
+    w = tf.reduce_sum(y_true_onehot, axis=[1, 2])
+    w = 1 / (w ** 2 + K.epsilon())
+
+    numerator = w * tf.reduce_sum(y_true_onehot * y_pred, axis=[1, 2])
+    numerator = tf.reduce_sum(numerator, axis=1)
+
+    denominator = w * tf.reduce_sum(y_true_onehot + y_pred, axis=[1, 2])
+    denominator = tf.reduce_sum(denominator, axis=1)
+
+    dice_loss = 1 - 2 * numerator / (denominator + K.epsilon())
+    return tf.reduce_mean(dice_loss)
+
 def focal_loss(y_true, y_pred, gamma=2.0):
     '''
     Inputs:

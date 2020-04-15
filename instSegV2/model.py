@@ -81,7 +81,7 @@ class Config(object):
         for m in self.module_order:
             assert m in ['semantic', 'dist', 'embedding']
 
-        assert self.loss_semantic in ['crossentropy', 'focal_loss']
+        assert self.loss_semantic in ['crossentropy', 'focal_loss', 'dice_loss']
         assert self.loss_seed in ['binary_crossentropy']
         assert self.loss_embedding in ['cos']
 
@@ -157,7 +157,8 @@ class InstSeg(object):
         for m in self.module_config:
             if m == 'semantic':
                 loss_semantic = {'crossentropy': L.cross_entropy, 
-                                 'focal_loss': lambda y_true, y_pred: L.focal_loss(y_true, y_pred, gamma=2.0)}
+                                 'focal_loss': lambda y_true, y_pred: L.focal_loss(y_true, y_pred, gamma=2.0),
+                                 'dice_loss': L.dice_loss}
                 self.loss_fn['semantic'] = loss_semantic[self.config.loss_semantic] 
                 # metrics.append(['accuracy'])
             elif m == 'dist':
@@ -172,8 +173,8 @@ class InstSeg(object):
     def _training_ds_from_np(self, data):
         for k in data.keys():
             if k == 'image':
-                data[k] = K.cast_to_floatx(image_resize_np(data[k], self.config.image_size))
-                # data[k] = K.cast_to_floatx(image_normalization_np(data[k])) 
+                data[k] = image_resize_np(data[k], self.config.image_size)
+                data[k] = K.cast_to_floatx(image_normalization_np(data[k])) 
             else:
                 data[k] = image_resize_np(data[k], self.config.image_size, method='nearest')
         
@@ -299,19 +300,21 @@ class InstSeg(object):
                     # summary output
                     if finishedStep % 50 == 0 and image_summary:
                         with train_summary_writer.as_default():
-                            tf.summary.image('input_img', ds_item['image'], step=finishedStep, max_outputs=1)
-                            for k, v in zip(self.module_config, outs):
-                                if k == 'semantic':
-                                    vis_semantic = tf.expand_dims(tf.argmax(v, axis=-1), axis=-1)
-                                    tf.summary.image('semantic', vis_semantic, step=finishedStep, max_outputs=1)
-                                elif k == 'dist':
-                                    tf.summary.image('dist', v, step=finishedStep, max_outputs=1)
-                                elif k == 'embedding':
-                                    for i in range(self.config.embedding_dim//3):
-                                        tf.summary.image('embedding_{}-{}'.format(3*i+1, 3*i+3), v[:,:,:,3*i:3*(i+1)], step=finishedStep, max_outputs=1)
-                                        if 'semantic' in self.module_config:
-                                            mask = tf.cast(tf.expand_dims(tf.argmax(v, axis=-1), axis=-1)>0, v.dtype)
-                                            tf.summary.image('masked_embedding_{}-{}'.format(3*i+1, 3*i+3), v[:,:,:,3*i:3*(i+1)]*mask, step=finishedStep, max_outputs=1)
+                            tf.summary.image('input_img', tf.cast(ds_item['image']*30 + 125, tf.uint8), step=finishedStep, max_outputs=1)
+                            outs_dict = {k: v for k, v in zip(self.module_config, outs)}
+                            
+                            if 'semantic' in outs_dict.keys():
+                                vis_semantic = tf.expand_dims(tf.argmax(outs_dict['semantic'], axis=-1), axis=-1)
+                                tf.summary.image('semantic', vis_semantic*255/tf.reduce_max(vis_semantic), step=finishedStep, max_outputs=1)
+                            if 'dist' in outs_dict.keys():
+                                tf.summary.image('dist', outs_dict['dist'], step=finishedStep, max_outputs=1)
+                            if 'embedding' in outs_dict.keys():
+                                for i in range(self.config.embedding_dim//3):
+                                    tf.summary.image('embedding_{}-{}'.format(3*i+1, 3*i+3), outs_dict['embedding'][:,:,:,3*i:3*(i+1)], step=finishedStep, max_outputs=1)
+                            if 'semantic' in outs_dict.keys() and 'embedding' in outs_dict.keys():
+                                for i in range(self.config.embedding_dim//3):
+                                    mask = tf.cast(tf.expand_dims(tf.argmax(outs_dict['semantic'], axis=-1), axis=-1)>0, v.dtype)
+                                    tf.summary.image('masked_embedding_{}-{}'.format(3*i+1, 3*i+3), outs_dict['embedding'][:,:,:,3*i:3*(i+1)]*mask, step=finishedStep, max_outputs=1)
 
 
             finishedEpoch += 1
@@ -324,7 +327,7 @@ class InstSeg(object):
         cp_file = tf.train.latest_checkpoint(self.model_dir)
         if cp_file is not None:
             self.model.load_weights(cp_file)
-        images = K.cast_to_floatx(image_resize_np(images, self.config.image_size))
+        images = image_resize_np(images, self.config.image_size)
         # images = K.cast_to_floatx(image_normalization_np(images)) 
 
         ds = tf.data.Dataset.from_tensor_slices(images).batch(1)
