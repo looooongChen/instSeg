@@ -6,6 +6,12 @@ from instSegV2.utils import *
 import instSegV2.loss as L
 import os
 
+try:
+    import tfAugmentor as tfaug 
+    augemntor_available = True
+except:
+    augemntor_available = False
+
 # construct the adjacent matrix using MAX_OBJ, 
 # if the object number in your cases is large, increase it correspondingly 
 MAX_OBJ = 300
@@ -57,6 +63,11 @@ class Config(object):
         self.neighbor_distance = 15
         self.weight_embedding = 1
 
+        # data augmentation
+        self.flip = True
+        self.elastic_strength = 2
+        self.elastic_scale = 10
+        self.random_rotation = False
 
         # training config:
         self.train_epochs = 100
@@ -161,8 +172,8 @@ class InstSeg(object):
     def _training_ds_from_np(self, data):
         for k in data.keys():
             if k == 'image':
-                data[k] = image_resize_np(data[k], self.config.image_size)
-                data[k] = K.cast_to_floatx(image_normalization_np(data[k])) 
+                data[k] = K.cast_to_floatx(image_resize_np(data[k], self.config.image_size))
+                # data[k] = K.cast_to_floatx(image_normalization_np(data[k])) 
             else:
                 data[k] = image_resize_np(data[k], self.config.image_size, method='nearest')
         
@@ -189,16 +200,16 @@ class InstSeg(object):
         # return data
         return tf.data.Dataset.from_tensor_slices(data)
 
-    def train(self, train_data, validation_data=None, 
-              augmentation=None, epochs=None, batch_size=None):
+    def train(self, train_data, validation_data=None, epochs=None, batch_size=None, 
+              augmentation=True, image_summary=True):
         
         '''
         Inputs: 
             train_data/validation_data: a dict of numpy array {'image': ..., 'semantic': ..., 'object': ...} 
-                                        or a tfrecords folder (use our script to save your data in tfrecords)
                 image (required): numpy array of size N x H x W x C 
                 object: numpy array of size N x H x W x 1, 0 indicated background
                 semantic: numpy array of size N x H x W x 1
+        TODO: tfrecords support
         '''
         # prepare network
         if not self.training_prepared:
@@ -206,13 +217,31 @@ class InstSeg(object):
         if epochs is None:
             epochs = self.config.train_epochs
         if batch_size is None:
-            batch_size = self.config.train_batch_size    
+            batch_size = self.config.train_batch_size
+
         # prepare data
-        if isinstance(train_data, str):
-            pass
-        else:
-            train_ds = self._training_ds_from_np(train_data).shuffle(buffer_size=64).batch(batch_size)
-            val_ds = None if validation_data is None else _training_ds_from_np(validation_data).batch(batch_size)
+        train_ds = self._training_ds_from_np(train_data)
+        if augemntor_available and augmentation:
+            label_list = [k for k in train_data.keys() if k != 'image' and k != 'adj_matrix']
+            aug_ds = []
+            if self.config.flip:
+                aug_flip = tfaug.Augmentor(image=['image'], label=label_list)
+                aug_flip.flip_left_right(probability=0.5)
+                aug_flip.flip_up_down(probability=0.5)
+                aug_ds.append(aug_flip(train_ds))
+            if self.config.elastic_strength != 0 and self.config.elastic_scale != 0:
+                aug_elas = tfaug.Augmentor(image=['image'], label=label_list)
+                aug_elas.elastic_deform(strength=self.config.elastic_strength, scale=self.config.elastic_scale, probability=1)
+                aug_ds.append(aug_elas(train_ds))
+            if self.config.random_rotation:
+                aug_rotation = tfaug.Augmentor(image=['image'], label=label_list)
+                aug_rotation.random_rotate(probability=1)
+                aug_ds.append(aug_rotation(train_ds))
+            for ds in aug_ds:
+                train_ds = train_ds.concatenate(ds)
+        train_ds = train_ds.shuffle(buffer_size=64).batch(batch_size)
+        val_ds = None if validation_data is None else _training_ds_from_np(validation_data).batch(batch_size)
+        
         
         # load model
         cp_file = tf.train.latest_checkpoint(self.model_dir)
@@ -254,16 +283,36 @@ class InstSeg(object):
                     grads = tape.gradient(loss, self.model.trainable_weights)
                     self.optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
                     
+                    # display trainig loss
                     disp = "Epoch {0:d}, Step {1:d} with loss: {2:.5f}".format(finishedEpoch+1, finishedStep, float(loss))
                     for k, v in losses.items():
                         disp += ', ' + k + ' loss: {:.5f}'.format(float(v))
-                    print(disp)
                     finishedStep += 1
+                    print(disp)
                     
+                    # summary training loss
                     with train_summary_writer.as_default():
                         tf.summary.scalar('loss', loss, step=finishedStep)
                         for k, v in losses.items():
-                            tf.summary.scalar(k, v, step=finishedStep)
+                            tf.summary.scalar('loss_'+k, v, step=finishedStep)
+
+                    # summary output
+                    if finishedStep % 50 == 0 and image_summary:
+                        with train_summary_writer.as_default():
+                            tf.summary.image('input_img', ds_item['image'], step=finishedStep, max_outputs=1)
+                            for k, v in zip(self.module_config, outs):
+                                if k == 'semantic':
+                                    vis_semantic = tf.expand_dims(tf.argmax(v, axis=-1), axis=-1)
+                                    tf.summary.image('semantic', vis_semantic, step=finishedStep, max_outputs=1)
+                                elif k == 'dist':
+                                    tf.summary.image('dist', v, step=finishedStep, max_outputs=1)
+                                elif k == 'embedding':
+                                    for i in range(self.config.embedding_dim//3):
+                                        tf.summary.image('embedding_{}-{}'.format(3*i+1, 3*i+3), v[:,:,:,3*i:3*(i+1)], step=finishedStep, max_outputs=1)
+                                        if 'semantic' in self.module_config:
+                                            mask = tf.cast(tf.expand_dims(tf.argmax(v, axis=-1), axis=-1)>0, v.dtype)
+                                            tf.summary.image('masked_embedding_{}-{}'.format(3*i+1, 3*i+3), v[:,:,:,3*i:3*(i+1)]*mask, step=finishedStep, max_outputs=1)
+
 
             finishedEpoch += 1
             
@@ -275,8 +324,8 @@ class InstSeg(object):
         cp_file = tf.train.latest_checkpoint(self.model_dir)
         if cp_file is not None:
             self.model.load_weights(cp_file)
-        images = image_resize_np(images, self.config.image_size)
-        images = K.cast_to_floatx(image_normalization_np(images)) 
+        images = K.cast_to_floatx(image_resize_np(images, self.config.image_size))
+        # images = K.cast_to_floatx(image_normalization_np(images)) 
 
         ds = tf.data.Dataset.from_tensor_slices(images).batch(1)
         if len(self.module_config) == 1:
