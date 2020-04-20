@@ -2,7 +2,7 @@ import tensorflow as tf
 import tensorflow.keras.backend as K 
 from instSegV2.utils import disk_tf
 
-def cross_entropy(y_true, y_pred):
+def crossentropy(y_true, y_pred):
     '''
     Inputs:
         y_true: label map of size B x H x W x 1
@@ -17,6 +17,24 @@ def cross_entropy(y_true, y_pred):
     loss = tf.reduce_sum(cross_entropy, axis=-1)
     # return the mean loss of each pixel inside the batch
     return tf.reduce_mean(loss)
+
+def weighted_binary_crossentropy(y_true, y_pred, weight=1):
+    '''
+    Inputs:
+        y_true: label map of size B x H x W x 1
+        y_pred: feature map of size B x H x W x 1, 'sigmoid' activated
+    '''
+    y_true = tf.cast(y_true, y_pred.dtype)
+    y_pred = K.clip(y_pred, K.epsilon(), 1.0-K.epsilon())
+    # cross entropy
+    crossentropy = -1 * y_true * K.log(y_pred) - (1 - y_true) * K.log(1 - y_pred)
+    # computer weight
+    # count = tf.size(y_true, out_type=y_pred.dtype)
+    # count_pos = tf.math.count_nonzero(y_true, dtype=y_pred.dtype)
+    # w_pos = tf.sqrt((count - count_pos)/count + K.epsilon())
+    weights = tf.cast(y_true>0, y_pred.dtype) * weight + tf.cast(y_true==0, y_pred.dtype)
+    
+    return tf.reduce_mean(crossentropy*weights)
 
 def dice_loss(y_true, y_pred):
     '''

@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 
 config = instSegV2.Config(semantic_module=True, dist_module=True, embedding_module=True)
 config.verbose = False
+config.loss_semantic = 'dice_loss'
 
 X = sorted(glob.glob('./ds_cysts/image/*.tif'))
 Y = sorted(glob.glob('./ds_cysts/ground_truth/*.png'))
@@ -21,8 +22,8 @@ train_data = {'image': np.array(list(map(imread,X))),
 # plt.imshow(Y[0])
 # plt.show()
 
-model = instSegV2.InstSeg(config=config, base_dir='./', run_name='complete')
-model.train(train_data, batch_size=4, epochs=300, augmentation=True)
+model = instSegV2.InstSeg(config=config, base_dir='./', run_name='augmentation_ind')
+model.train(train_data, batch_size=4, epochs=500, augmentation=False)
 
 # import time
 # start = time.time()

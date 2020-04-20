@@ -53,7 +53,7 @@ class Config(object):
         self.max_obj = MAX_OBJ
         
         # config of the semantic loss
-        self.loss_semantic = 'focal_loss' 
+        self.loss_semantic = 'dice_loss' 
         self.weight_semantic = 1
         # config of the seed loss
         self.loss_dist = 'binary_crossentropy'
@@ -140,7 +140,8 @@ class InstSeg(object):
         output_list = []
         for m in self.module_config:
             m_out = self.out_layer[m](self.nets[m](K.concatenate(input_list, axis=-1)))
-            input_list.append(m_out)
+            input_list.append(tf.stop_gradient(tf.identity(m_out)))
+            # input_list.append(m_out)
             output_list.append(m_out)
         
         self.model = keras.Model(inputs=self.input_img, outputs=output_list)
@@ -150,19 +151,19 @@ class InstSeg(object):
     
     def _prepare_training(self):
         self.optimizer = keras.optimizers.Adam(lr=self.config.train_learning_rate)
-        # self.optimizer = tf.keras.optimizers.RMSprop(lr=self.config.train_learning_rate)
 
         self.loss_fn = {}
         # metrics = []
         for m in self.module_config:
             if m == 'semantic':
-                loss_semantic = {'crossentropy': L.cross_entropy, 
+                loss_semantic = {'crossentropy': L.crossentropy, 
                                  'focal_loss': lambda y_true, y_pred: L.focal_loss(y_true, y_pred, gamma=2.0),
                                  'dice_loss': L.dice_loss}
                 self.loss_fn['semantic'] = loss_semantic[self.config.loss_semantic] 
                 # metrics.append(['accuracy'])
             elif m == 'dist':
-                loss_dist = {'binary_crossentropy': tf.keras.losses.BinaryCrossentropy()} 
+                # loss_dist = {'binary_crossentropy': tf.keras.losses.BinaryCrossentropy()} 
+                loss_dist = {'binary_crossentropy': L.weighted_binary_crossentropy} 
                 self.loss_fn['dist'] = loss_dist[self.config.loss_dist]
             elif m == 'embedding':
                  loss_embedding = {'cos': lambda y_true, y_pred, adj_indicator: L.cosine_embedding_loss(y_true, y_pred, adj_indicator, self.config.max_obj, include_background=not self.config.semantic_module)}
@@ -223,26 +224,33 @@ class InstSeg(object):
         # prepare data
         train_ds = self._training_ds_from_np(train_data)
         if augemntor_available and augmentation:
-            label_list = [k for k in train_data.keys() if k != 'image' and k != 'adj_matrix']
+            image_list = ['image']
+            label_list = []
+            if 'dist' in train_data.keys():
+                image_list.append('dist')
+            if 'semantic' in train_data.keys():
+                label_list.append('semantic')
+            if 'object' in train_data.keys():
+                label_list.append('object')
             aug_ds = []
             if self.config.flip:
-                aug_flip = tfaug.Augmentor(image=['image'], label=label_list)
+                aug_flip = tfaug.Augmentor(image=image_list, label=label_list)
                 aug_flip.flip_left_right(probability=0.5)
                 aug_flip.flip_up_down(probability=0.5)
                 aug_ds.append(aug_flip(train_ds))
             if self.config.elastic_strength != 0 and self.config.elastic_scale != 0:
-                aug_elas = tfaug.Augmentor(image=['image'], label=label_list)
+                print('elastic')
+                aug_elas = tfaug.Augmentor(image=image_list, label=label_list)
                 aug_elas.elastic_deform(strength=self.config.elastic_strength, scale=self.config.elastic_scale, probability=1)
                 aug_ds.append(aug_elas(train_ds))
             if self.config.random_rotation:
-                aug_rotation = tfaug.Augmentor(image=['image'], label=label_list)
+                aug_rotation = tfaug.Augmentor(image=image_list, label=label_list)
                 aug_rotation.random_rotate(probability=1)
                 aug_ds.append(aug_rotation(train_ds))
             for ds in aug_ds:
                 train_ds = train_ds.concatenate(ds)
         train_ds = train_ds.shuffle(buffer_size=64).batch(batch_size)
         val_ds = None if validation_data is None else _training_ds_from_np(validation_data).batch(batch_size)
-        
         
         # load model
         cp_file = tf.train.latest_checkpoint(self.model_dir)
@@ -300,7 +308,7 @@ class InstSeg(object):
                     # summary output
                     if finishedStep % 50 == 0 and image_summary:
                         with train_summary_writer.as_default():
-                            tf.summary.image('input_img', tf.cast(ds_item['image']*30 + 125, tf.uint8), step=finishedStep, max_outputs=1)
+                            tf.summary.image('input_img', tf.cast(ds_item['image']*25+125, tf.uint8), step=finishedStep, max_outputs=1)
                             outs_dict = {k: v for k, v in zip(self.module_config, outs)}
                             
                             if 'semantic' in outs_dict.keys():
@@ -337,7 +345,6 @@ class InstSeg(object):
             pred = {m: p for m, p in zip(self.module_config, self.model.predict(ds))}
         
         if 'embedding' in pred.keys():
-            print("==================nomr")
             pred['embedding'] = tf.math.l2_normalize(pred['embedding'], axis=-1, name='emb_normalization')
         
         return pred
