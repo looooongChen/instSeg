@@ -26,5 +26,5 @@ train_data = {'image': list(map(cv2.imread,X)),
 # plt.show()
 
 model = instSegV2.InstSeg(config=config, base_dir='./', run_name='cvppp_aug')
-model.train(train_data, batch_size=4, epochs=800, augmentation=False)
+model.train(train_data, batch_size=4, epochs=800, augmentation=True)
 
