@@ -121,7 +121,10 @@ class InstSeg(object):
                                          dropout_rate=self.config.dropout_rate,
                                          batch_normalization=self.config.batch_normalization,
                                          name='net_dist')
-            self.out_layer['dist'] = keras.layers.Conv2D(filters=1, kernel_size=1, activation='sigmoid', name='dist')
+            if self.config.loss_dist == 'binary_crossentropy':
+                self.out_layer['dist'] = keras.layers.Conv2D(filters=1, kernel_size=1, activation='sigmoid', name='dist')
+            if self.config.loss_dist == 'mse':    
+                self.out_layer['dist'] = keras.layers.Conv2D(filters=1, kernel_size=1, activation='relu', name='dist')
         # create embedding module
         if self.config.embedding_module:
             self.nets['embedding'] = backbone(filters=self.config.filters_embedding,
