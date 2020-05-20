@@ -143,8 +143,8 @@ class InstSeg(object):
         output_list = []
         for m in self.module_config:
             m_feature = self.nets[m](K.concatenate(input_list, axis=-1))
-            m_out = self.out_layer[m](m_feature)
-            # input_list.append(tf.stop_gradient(tf.identity(m_feature)))
+            # m_out = self.out_layer[m](m_feature)
+            input_list.append(tf.stop_gradient(tf.identity(m_feature)))
             input_list.append(m_feature)
             output_list.append(m_out)
         
