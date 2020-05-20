@@ -56,7 +56,7 @@ class Config(object):
         self.loss_semantic = 'dice_loss' 
         self.weight_semantic = 1
         # config of the seed loss
-        self.loss_dist = 'mse'
+        self.loss_dist = 'binary_crossentropy'
         self.weight_dist = 1
         # config of the embedding loss
         self.loss_embedding = 'cos'
