@@ -67,7 +67,7 @@ class Config(object):
         self.flip = True
         self.elastic_strength = 2
         self.elastic_scale = 10
-        self.random_rotation = False
+        self.rotation = True
 
         # training config:
         self.train_epochs = 100
@@ -179,7 +179,7 @@ class InstSeg(object):
                 data[k] = K.cast_to_floatx(image_normalization_np(data[k])) 
             else:
                 data[k] = image_resize_np(data[k], self.config.image_size, method='nearest')
-        
+
         required = ['image']
         for m in self.module_config:
             if m == 'semantic':
@@ -190,14 +190,11 @@ class InstSeg(object):
                     data['semantic'] = data['object']>0
             elif m == 'dist':
                 required.append('dist')
-                print(data['object'].shape)
                 data['dist']  = edt_np(data['object'], normalize=True)
             elif m == 'embedding':
                 required.append('object')
                 required.append('adj_matrix')
                 data['adj_matrix'] = adj_matrix_np(data['object'], self.config.neighbor_distance, self.config.max_obj)
-
-        print(data['image'].shape, data['semantic'].shape, data['dist'].shape, data['adj_matrix'].shape)
 
         for k in list(data.keys()):
             if k not in required:
@@ -247,10 +244,13 @@ class InstSeg(object):
                 aug_elas = tfaug.Augmentor(image=image_list, label=label_list)
                 aug_elas.elastic_deform(strength=self.config.elastic_strength, scale=self.config.elastic_scale, probability=1)
                 aug_ds.append(aug_elas(train_ds))
-            if self.config.random_rotation:
-                aug_rotation = tfaug.Augmentor(image=image_list, label=label_list)
-                aug_rotation.random_rotate(probability=1)
-                aug_ds.append(aug_rotation(train_ds))
+            if self.config.rotation:
+                aug_rotate90 = tfaug.Augmentor(image=image_list, label=label_list)
+                aug_rotate90.rotate90(probability=1)
+                aug_ds.append(aug_rotate90(train_ds))
+                aug_rotate270 = tfaug.Augmentor(image=image_list, label=label_list)
+                aug_rotate270.rotate270(probability=1)
+                aug_ds.append(aug_rotate270(train_ds))
             for ds in aug_ds:
                 train_ds = train_ds.concatenate(ds)
         train_ds = train_ds.shuffle(buffer_size=64).batch(batch_size)

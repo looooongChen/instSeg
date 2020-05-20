@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from instSegV2.post_process import *
 
 config = instSegV2.Config(semantic_module=True, dist_module=True, embedding_module=True)
-config.random_rotation = True
+config.rotation = True
 
 dirs = ['A1', 'A2', 'A3', 'A4']
 
@@ -26,5 +26,5 @@ train_data = {'image': list(map(cv2.imread,X)),
 # plt.show()
 
 model = instSegV2.InstSeg(config=config, base_dir='./', run_name='cvppp_aug')
-model.train(train_data, batch_size=4, epochs=800, augmentation=True)
+model.train(train_data, batch_size=4, epochs=300, augmentation=True)
 
