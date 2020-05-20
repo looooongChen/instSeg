@@ -36,6 +36,20 @@ def weighted_binary_crossentropy(y_true, y_pred, weight=1):
     
     return tf.reduce_mean(crossentropy*weights)
 
+def mse(y_true, y_pred, weight=1):
+    '''
+    Inputs:
+        y_true: label map of size B x H x W x 1
+        y_pred: feature map of size B x H x W x 1, 'sigmoid' activated
+    '''
+    y_true = tf.cast(y_true, y_pred.dtype)
+    # cross entropy
+    mse = (y_pred - y_true) ** 2
+    # weight
+    weights = tf.cast(y_true>0, y_pred.dtype) * weight + tf.cast(y_true==0, y_pred.dtype)
+    
+    return tf.reduce_mean(mse*weights)
+
 def dice_loss(y_true, y_pred):
     '''
     Inputs:

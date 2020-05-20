@@ -24,7 +24,7 @@ class Config(object):
                  embedding_module=True, embedding_dim=8):
 
         assert net in ['uNet', 'uNetD7']
-        self.verbose = True
+        self.verbose = False
 
         # input size
         self.image_size = 512, 512
@@ -56,7 +56,7 @@ class Config(object):
         self.loss_semantic = 'dice_loss' 
         self.weight_semantic = 1
         # config of the seed loss
-        self.loss_dist = 'binary_crossentropy'
+        self.loss_dist = 'mse'
         self.weight_dist = 1
         # config of the embedding loss
         self.loss_embedding = 'cos'
@@ -82,7 +82,7 @@ class Config(object):
             assert m in ['semantic', 'dist', 'embedding']
 
         assert self.loss_semantic in ['crossentropy', 'focal_loss', 'dice_loss']
-        assert self.loss_seed in ['binary_crossentropy']
+        assert self.loss_seed in ['binary_crossentropy', 'mse']
         assert self.loss_embedding in ['cos']
 
 
@@ -139,9 +139,10 @@ class InstSeg(object):
         input_list = [self.input_img]
         output_list = []
         for m in self.module_config:
-            m_out = self.out_layer[m](self.nets[m](K.concatenate(input_list, axis=-1)))
-            input_list.append(tf.stop_gradient(tf.identity(m_out)))
-            # input_list.append(m_out)
+            m_feature = self.nets[m](K.concatenate(input_list, axis=-1))
+            m_out = self.out_layer[m](m_feature)
+            # input_list.append(tf.stop_gradient(tf.identity(m_feature)))
+            input_list.append(m_feature)
             output_list.append(m_out)
         
         self.model = keras.Model(inputs=self.input_img, outputs=output_list)
@@ -163,7 +164,7 @@ class InstSeg(object):
                 # metrics.append(['accuracy'])
             elif m == 'dist':
                 # loss_dist = {'binary_crossentropy': tf.keras.losses.BinaryCrossentropy()} 
-                loss_dist = {'binary_crossentropy': L.weighted_binary_crossentropy} 
+                loss_dist = {'binary_crossentropy': L.weighted_binary_crossentropy, 'mse': L.mse} 
                 self.loss_fn['dist'] = loss_dist[self.config.loss_dist]
             elif m == 'embedding':
                  loss_embedding = {'cos': lambda y_true, y_pred, adj_indicator: L.cosine_embedding_loss(y_true, y_pred, adj_indicator, self.config.max_obj, include_background=not self.config.semantic_module)}
@@ -189,11 +190,14 @@ class InstSeg(object):
                     data['semantic'] = data['object']>0
             elif m == 'dist':
                 required.append('dist')
+                print(data['object'].shape)
                 data['dist']  = edt_np(data['object'], normalize=True)
             elif m == 'embedding':
                 required.append('object')
                 required.append('adj_matrix')
                 data['adj_matrix'] = adj_matrix_np(data['object'], self.config.neighbor_distance, self.config.max_obj)
+
+        print(data['image'].shape, data['semantic'].shape, data['dist'].shape, data['adj_matrix'].shape)
 
         for k in list(data.keys()):
             if k not in required:
@@ -327,6 +331,9 @@ class InstSeg(object):
 
             finishedEpoch += 1
             
+            if os.path.exists(self.model_dir):
+                for f in os.listdir(self.model_dir):
+                    os.remove(os.path.join(self.model_dir, f))
             self.model.save_weights(os.path.join(self.model_dir, 'weights_epoch'+str(finishedEpoch)+'_step'+str(finishedStep)))
             print('Model saved at Step {:d}, Epoch {:d}'.format(finishedStep, finishedEpoch))
 
@@ -336,7 +343,7 @@ class InstSeg(object):
         if cp_file is not None:
             self.model.load_weights(cp_file)
         images = image_resize_np(images, self.config.image_size)
-        # images = K.cast_to_floatx(image_normalization_np(images)) 
+        images = K.cast_to_floatx(image_normalization_np(images)) 
 
         ds = tf.data.Dataset.from_tensor_slices(images).batch(1)
         if len(self.module_config) == 1:

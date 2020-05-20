@@ -4,10 +4,10 @@ import glob
 from skimage.io import imread
 import numpy as np
 import matplotlib.pyplot as plt
+from instSegV2.post_process import *
 
 config = instSegV2.Config(semantic_module=True, dist_module=True, embedding_module=True)
-config.verbose = False
-config.loss_semantic = 'dice_loss'
+config.batch_normalization = False
 
 X = sorted(glob.glob('./ds_cysts/image/*.tif'))
 Y = sorted(glob.glob('./ds_cysts/ground_truth/*.png'))
@@ -23,7 +23,7 @@ train_data = {'image': np.array(list(map(imread,X))),
 # plt.show()
 
 model = instSegV2.InstSeg(config=config, base_dir='./', run_name='augmentation_ind')
-model.train(train_data, batch_size=4, epochs=500, augmentation=False)
+# model.train(train_data, batch_size=4, epochs=500, augmentation=False)
 
 # import time
 # start = time.time()
@@ -42,18 +42,37 @@ model.train(train_data, batch_size=4, epochs=500, augmentation=False)
 # print(out_list[0].dtype, out_list[1].dtype, out_list[2].dtype)
 
 
-imgs = train_data['image'][0:5]
-pred = model.predict(imgs)
+X = sorted(glob.glob('./ds_cysts/image/*.tif'))[0:3]
+imgs = np.array(list(map(imread,X)))
 
-plt.subplot(1,3,1)
-plt.imshow(imgs[0])
-plt.subplot(1,3,2)
-plt.imshow(np.argmax(pred['semantic'][0], axis=-1))
-plt.subplot(1,3,3)
-plt.imshow(np.squeeze(pred['dist'][0]))
-# m = np.expand_dims(np.argmax(pred['semantic'][0], axis=-1), axis=-1)
-# plt.subplot(1,2,1)
-# plt.imshow(m)
-# plt.subplot(1,2,2)
-# plt.imshow(pred['embedding'][0,:,:,3:6]*m)
+print(imgs.shape)
+pred = model.predict(imgs)
+# l = maskViaSeed(pred)
+
+# plt.subplot(1,3,1)
+# plt.imshow(imgs[1])
+# plt.subplot(1,3,2)
+# plt.imshow(l)
+# plt.subplot(1,3,3)
+# plt.imshow(np.squeeze(np.argmax(pred['semantic'][1], axis=-1)))
+
+m = np.squeeze(np.argmax(pred['semantic'][0], axis=-1))
+plt.subplot(1,2,1)
+plt.imshow(m)
+plt.subplot(1,2,2)
+m = np.expand_dims(m, axis=-1)
+plt.imshow(pred['embedding'][0,:,:,3:6]*m)
 plt.show()
+np.save('./emb.npy', pred['embedding']*m)
+
+# from visualization import * 
+# import cv2
+# # l = cv2.resize(l, (imgs[1].shape[1], imgs[1].shape[0]), interpolation=cv2.INTER_NEAREST)
+# # print(imgs[1].shape, l.shape)
+# ll = mask2masks(l)
+
+# img = l = cv2.resize(imgs[1], (512, 512), interpolation=cv2.INTER_NEAREST)
+
+# vis = visulize_masks(img, ll, random_color=True, fill=True)
+# plt.imshow(vis)
+# plt.show()

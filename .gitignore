@@ -1,3 +1,5 @@
 ds_*/
 model_*/
 log_*/
+__pycache__/
+instSegV2/__pycache__/

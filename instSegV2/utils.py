@@ -26,7 +26,7 @@ from tqdm import tqdm
 def image_resize_np(images, sz, method='bilinear'):
     '''
     Args:
-        images: B x H x W x C
+        images: B x H x W x C or list of H x W x C
         sz: (heigh, width)
     '''
     resized = []
@@ -37,7 +37,7 @@ def image_resize_np(images, sz, method='bilinear'):
             resized.append(cv2.resize(img, sz, interpolation=cv2.INTER_LINEAR))
     resized = np.array(resized)
     # to keep shape unchanged
-    if images.shape[-1] == 1:
+    if len(resized.shape) == 3:
         resized = np.expand_dims(resized, axis=-1)
     return resized
 
