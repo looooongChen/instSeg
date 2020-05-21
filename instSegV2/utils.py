@@ -155,7 +155,7 @@ def edt_np(label, normalize=True):
             props = regionprops(l, intensity_image=dt, cache=True)
             for p in props:
                 rr, cc = p['coords'][:,0], p['coords'][:,1]
-                dt[rr, cc] = dt[rr, cc] / p['max_intensity']
+                dt[rr, cc] = dt[rr, cc] / (p['max_intensity'] + 1e-8)
         dts.append(dt)
     return np.expand_dims(np.array(dts), axis=-1)
 

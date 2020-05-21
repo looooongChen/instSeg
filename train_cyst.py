@@ -22,8 +22,8 @@ train_data = {'image': np.array(list(map(imread,X))),
 # plt.imshow(Y[0])
 # plt.show()
 
-model = instSegV2.InstSeg(config=config, base_dir='./', run_name='augmentation_ind')
-# model.train(train_data, batch_size=4, epochs=500, augmentation=False)
+model = instSegV2.InstSeg(config=config, base_dir='./', run_name='cyst_aug')
+model.train(train_data, batch_size=4, epochs=500, augmentation=False)
 
 # import time
 # start = time.time()
@@ -42,28 +42,28 @@ model = instSegV2.InstSeg(config=config, base_dir='./', run_name='augmentation_i
 # print(out_list[0].dtype, out_list[1].dtype, out_list[2].dtype)
 
 
-X = sorted(glob.glob('./ds_cysts/image/*.tif'))[0:3]
-imgs = np.array(list(map(imread,X)))
+# X = sorted(glob.glob('./ds_cysts/image/*.tif'))[0:3]
+# imgs = np.array(list(map(imread,X)))
 
-print(imgs.shape)
-pred = model.predict(imgs)
-# l = maskViaSeed(pred)
+# print(imgs.shape)
+# pred = model.predict(imgs)
+# # l = maskViaSeed(pred)
 
-# plt.subplot(1,3,1)
-# plt.imshow(imgs[1])
-# plt.subplot(1,3,2)
-# plt.imshow(l)
-# plt.subplot(1,3,3)
-# plt.imshow(np.squeeze(np.argmax(pred['semantic'][1], axis=-1)))
+# # plt.subplot(1,3,1)
+# # plt.imshow(imgs[1])
+# # plt.subplot(1,3,2)
+# # plt.imshow(l)
+# # plt.subplot(1,3,3)
+# # plt.imshow(np.squeeze(np.argmax(pred['semantic'][1], axis=-1)))
 
-m = np.squeeze(np.argmax(pred['semantic'][0], axis=-1))
-plt.subplot(1,2,1)
-plt.imshow(m)
-plt.subplot(1,2,2)
-m = np.expand_dims(m, axis=-1)
-plt.imshow(pred['embedding'][0,:,:,3:6]*m)
-plt.show()
-np.save('./emb.npy', pred['embedding']*m)
+# m = np.squeeze(np.argmax(pred['semantic'][0], axis=-1))
+# plt.subplot(1,2,1)
+# plt.imshow(m)
+# plt.subplot(1,2,2)
+# m = np.expand_dims(m, axis=-1)
+# plt.imshow(pred['embedding'][0,:,:,3:6]*m)
+# plt.show()
+# np.save('./emb.npy', pred['embedding']*m)
 
 # from visualization import * 
 # import cv2

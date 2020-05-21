@@ -56,7 +56,8 @@ class Config(object):
         self.loss_semantic = 'dice_loss' 
         self.weight_semantic = 1
         # config of the seed loss
-        self.loss_dist = 'binary_crossentropy'
+        self.loss_dist = 'mse'
+        self.pos_weight = 10
         self.weight_dist = 1
         # config of the embedding loss
         self.loss_embedding = 'cos'
@@ -144,8 +145,9 @@ class InstSeg(object):
         for m in self.module_config:
             m_feature = self.nets[m](K.concatenate(input_list, axis=-1))
             m_out = self.out_layer[m](m_feature)
-            input_list.append(tf.stop_gradient(tf.identity(m_feature)))
-            # input_list.append(m_feature)
+            # input_list.append(tf.stop_gradient(tf.identity(m_feature)))
+            input_list.append(m_feature)
+            # input_list.append(m_out)
             output_list.append(m_out)
         
         self.model = keras.Model(inputs=self.input_img, outputs=output_list)
@@ -166,8 +168,8 @@ class InstSeg(object):
                 self.loss_fn['semantic'] = loss_semantic[self.config.loss_semantic] 
                 # metrics.append(['accuracy'])
             elif m == 'dist':
-                # loss_dist = {'binary_crossentropy': tf.keras.losses.BinaryCrossentropy()} 
-                loss_dist = {'binary_crossentropy': L.weighted_binary_crossentropy, 'mse': L.mse} 
+                loss_dist = {'binary_crossentropy': lambda y_true, y_pred: L.weighted_binary_crossentropy(y_true, y_pred, weight=self.config.pos_weight), 
+                             'mse': lambda y_true, y_pred: L.mse(y_true, y_pred, weight=self.config.pos_weight)} 
                 self.loss_fn['dist'] = loss_dist[self.config.loss_dist]
             elif m == 'embedding':
                  loss_embedding = {'cos': lambda y_true, y_pred, adj_indicator: L.cosine_embedding_loss(y_true, y_pred, adj_indicator, self.config.max_obj, include_background=not self.config.semantic_module)}
@@ -180,8 +182,12 @@ class InstSeg(object):
             if k == 'image':
                 data[k] = image_resize_np(data[k], self.config.image_size)
                 data[k] = K.cast_to_floatx(image_normalization_np(data[k])) 
+                # data[k] = K.cast_to_floatx(data[k]) 
             else:
                 data[k] = image_resize_np(data[k], self.config.image_size, method='nearest')
+        # import cv2
+        # for i in range(len(data['image'])):
+        #     cv2.imsave()
 
         required = ['image']
         for m in self.module_config:
@@ -256,7 +262,7 @@ class InstSeg(object):
                 aug_ds.append(aug_rotate270(train_ds))
             for ds in aug_ds:
                 train_ds = train_ds.concatenate(ds)
-        train_ds = train_ds.shuffle(buffer_size=64).batch(batch_size)
+        train_ds = train_ds.shuffle(buffer_size=512).batch(batch_size)
         val_ds = None if validation_data is None else _training_ds_from_np(validation_data).batch(batch_size)
         
         # load model
@@ -321,8 +327,12 @@ class InstSeg(object):
                             if 'semantic' in outs_dict.keys():
                                 vis_semantic = tf.expand_dims(tf.argmax(outs_dict['semantic'], axis=-1), axis=-1)
                                 tf.summary.image('semantic', vis_semantic*255/tf.reduce_max(vis_semantic), step=finishedStep, max_outputs=1)
+                                tf.summary.image('semantic_gt', tf.cast(ds_item['semantic'], tf.uint8)*255, step=finishedStep, max_outputs=1)
                             if 'dist' in outs_dict.keys():
-                                tf.summary.image('dist', outs_dict['dist'], step=finishedStep, max_outputs=1)
+                                vis_dist = tf.cast(outs_dict['dist']*255/tf.reduce_max(outs_dict['dist']), tf.uint8)
+                                tf.summary.image('dist', vis_dist, step=finishedStep, max_outputs=1)
+                                vis_dist_gt = tf.cast(ds_item['dist']*255/tf.reduce_max(ds_item['dist']), tf.uint8)
+                                tf.summary.image('dist_gt', vis_dist_gt, step=finishedStep, max_outputs=1)
                             if 'embedding' in outs_dict.keys():
                                 for i in range(self.config.embedding_dim//3):
                                     tf.summary.image('embedding_{}-{}'.format(3*i+1, 3*i+3), outs_dict['embedding'][:,:,:,3*i:3*(i+1)], step=finishedStep, max_outputs=1)
