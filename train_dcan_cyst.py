@@ -6,7 +6,7 @@ import os
 import csv
 
 config = instSeg.ConfigContour()
-run_name = 'cyst_DCAN'
+run_name = 'model_DCAN_cyst'
 base_dir = './'
 splits = [0]
 
