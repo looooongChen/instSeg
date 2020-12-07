@@ -3,6 +3,7 @@ from tensorflow import keras
 import tensorflow.keras.backend as K
 from instSeg.model_base import InstSegBase 
 from instSeg.uNet import *
+from instSeg.uNetDoubleHead import *
 from instSeg.utils import *
 import instSeg.loss as L
 from instSeg.post_process import *
@@ -19,11 +20,11 @@ except:
     augemntor_available = False
 
 
-class InstSegContour(InstSegBase):
+class InstSegDCAN(InstSegBase):
 
     def __init__(self, config, base_dir='./', run_name=''):
         super().__init__(config, base_dir, run_name)
-        self.val_best = 0
+        self.best_score = float('inf') if self.config.save_best_metric == 'loss' else 0
 
     def _build(self):
         self.input_img = keras.layers.Input((self.config.H, self.config.W, self.config.image_channel), name='input_img')
@@ -31,21 +32,31 @@ class InstSegContour(InstSegBase):
 
         output_list = []
 
-        self.net = UNnet(filters=self.config.filters,
-                         dropout_rate=self.config.dropout_rate,
-                         batch_norm=self.config.batch_norm,
-                         name='net')
-        self.outlayer_semantic = keras.layers.Conv2D(filters=self.config.classes+1, 
-                                                     kernel_size=1, padding='same', activation='softmax', 
+        backbone = UNnetDoubleHead if self.config.backbone == 'uNetDoubleHead' else UNnet
+        self.net = backbone(filters=self.config.filters,
+                            dropout_rate=self.config.dropout_rate,
+                            batch_norm=self.config.batch_norm,
+                            name='net')
+                    
+        self.outlayer_semantic = keras.layers.Conv2D(filters=self.config.classes, 
+                                                     kernel_size=3, padding='same', activation='softmax', 
                                                      kernel_initializer='he_normal', 
                                                      name='out_semantic')
         self.outlayer_contour = keras.layers.Conv2D(filters=1, 
-                                                    kernel_size=1, padding='same', activation='sigmoid', 
+                                                    kernel_size=3, padding='same', activation='sigmoid', 
                                                     kernel_initializer='he_normal', 
                                                     name='out_contour')
-        features = self.net(self.normalized_img)
-        out_semantic = self.outlayer_semantic(features)
-        out_contour = self.outlayer_contour(features)
+
+        if self.config.backbone == 'uNetDoubleHead':
+            features1, features2 = self.net(self.normalized_img)
+            out_semantic = self.outlayer_semantic(features1)
+            out_contour = self.outlayer_contour(features2)
+        else:
+            features = self.net(self.normalized_img)
+            out_semantic = self.outlayer_semantic(features)
+            out_contour = self.outlayer_contour(features)
+            
+        
 
         self.model = keras.Model(inputs=self.input_img, outputs=[out_semantic, out_contour])
         
@@ -53,28 +64,57 @@ class InstSegContour(InstSegBase):
             self.model.summary()
             tf.keras.utils.plot_model(self.model, to_file='./model.png', show_shapes=False, show_layer_names=True)
     
-    def _validate(self, val_ds, metric='loss'):
+    def evaluate(self, ds):
         '''
+        Args:
+            ds: validation dataset
+        Return:
+            improved: bool
+        '''
+        e = Evaluator(dimension=2, mode='area')
+        loss = []
+        for ds_item in ds:
+            raw = self.predict_raw(ds_item['image'])
+            instances, _, _ = self.postprocess(raw)
+            e.add_example(instances, np.squeeze(ds_item['instance']))
+            loss_semantic = self.loss_fn_semantic(ds_item['semantic'], raw[0])
+            loss_contour = self.loss_fn_contour(ds_item['contour'], raw[1])
+            loss.append(loss_semantic * self.config.weight_semantic + loss_contour * self.config.weight_contour)
+        mAP = e.mAP()
+        mAJ = e.mAJ()
+        loss = np.mean(loss)
+        return mAP, mAJ, loss
+
+
+    def _validate(self, val_ds):
+        '''
+        Args:
+            val_ds: validation dataset
         Return:
             improved: bool
         '''
         print('Running validation: ')
-        e = Evaluator(dimension=2, mode='area')
-        for ds_item in val_ds:
-            instances, _ =self.predict(ds_item['image'], contour_thres=0.5, keep_size=False)
-            e.add_example(instances, np.squeeze(ds_item['instance']))
-        s = e.mAP()
+        mAP, mAJ, loss = self.evaluate(val_ds)
         # summary training loss
         with self.val_summary_writer.as_default():
-            tf.summary.scalar('validation mAP', s, step=self.training_step)
+            tf.summary.scalar('validation mAP', mAP, step=self.training_step)
+            tf.summary.scalar('validation mAJ', mAJ, step=self.training_step)
+            tf.summary.scalar('validation loss', loss, step=self.training_step)
         # best score
-        disp = 'validation mAP: {:.5f}'.format(s)
-        if s > self.val_best:
-            self.val_best = s
-            print("Improved: " + disp)
+        disp = 'validation loss: {:.5f} mAP: {:.5f}, mAJ: {:.5f}'.format(loss, mAP, mAJ)
+        if self.config.save_best_metric == 'loss':
+            score = loss
+        elif self.config.save_best_metric == 'mAP':
+            score = mAP
+        else: # use mAJ
+            score= mAJ
+
+        if score > self.best_score:
+            self.best_score = score
+            print("Validation Score Improved: " + disp)
             return True
         else:
-            print("Not improved: " + disp)
+            print("Validation Score Not Improved: " + disp)
             return False
 
     def train(self, train_data, validation_data=None, epochs=None, batch_size=None,
@@ -101,7 +141,10 @@ class InstSegContour(InstSegBase):
         if augmentation:
             train_ds = self.ds_augment(train_ds)
         train_ds = train_ds.shuffle(buffer_size=512).batch(batch_size)
-        val_ds = None if validation_data is None else self.ds_from_np(validation_data, instance=True).batch(1)
+        if validation_data is None or len(validation_data['image']) == 0:
+            val_ds = None
+        else:
+            val_ds = self.ds_from_np(validation_data, instance=True, semantic=True, contour=True).batch(1)
             
         # load model
         self.load_weights()
@@ -149,14 +192,13 @@ class InstSegContour(InstSegBase):
                 improved = self._validate(val_ds)
                 if improved:
                     self.save_weights(save_best=True)
-    
-    def predict(self, image, contour_thres=0.5, keep_size=True):
 
-        sz = image.shape
-        pred = self.predict_raw(image)
+    def postprocess(self, raw):
 
-        semantic = np.argmax(pred[0], axis=-1).astype(np.uint16)
-        contour = cv2.dilate((pred[1] > contour_thres).astype(np.uint8), disk_np(1, np.uint8), iterations = 1)
+        contour_thres=0.5
+
+        semantic = np.argmax(raw[0], axis=-1).astype(np.uint16)
+        contour = cv2.dilate((raw[1] > contour_thres).astype(np.uint8), disk_np(1, np.uint8), iterations = 1)
 
         instances = relabel(semantic * (contour == 0)).astype(np.uint16)
         fg = (semantic > 0).astype(np.uint16)
@@ -166,10 +208,20 @@ class InstSegContour(InstSegBase):
                 instances += pixel_add
             else:
                 break
+
+        return instances, semantic, contour
+    
+    def predict(self, image, keep_size=True):
+
+        sz = image.shape
+        raw = self.predict_raw(image)
+
+        instance, semantic, contour = self.postprocess(raw)
         
         if keep_size:
             instances = cv2.resize(instances, (sz[1], sz[0]), interpolation=cv2.INTER_NEAREST)
             semantic = cv2.resize(semantic, (sz[1], sz[0]), interpolation=cv2.INTER_NEAREST)
+            contour = cv2.resize(contour, (sz[1], sz[0]), interpolation=cv2.INTER_NEAREST)
 
-        return instances, semantic
+        return instances, semantic, contour
     

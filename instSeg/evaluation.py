@@ -1,11 +1,12 @@
 import numpy as np
 from scipy.spatial import distance_matrix
+from skimage.measure import regionprops
 
 '''
 Author: Long Chen
 Support:
     - higher dimensional data
-    - evaluation in 'area' mode and 'line' mode
+    - evaluation in 'area' mode and 'curve' mode
     - input as label map or stacked binary maps
     - matrics: 
         - averagePrecision, aggregatedPricision
@@ -41,16 +42,17 @@ class Sample(object):
     class for evaluating a singe prediction-gt pair
     """
 
-    def __init__(self, pd, gt, dimension=2, mode='area', boundary_tolerance=3):
+    def __init__(self, pd, gt, dimension=2, mode='area', tolerance=3):
 
         '''
         Args:
             pd: numpy array of dimension D or D+1
             gt: numpy array of dimension D or D+1
             dimension: dimension D of the image / ground truth
-            mode: 'area' / 'line', evaluate area or boundary
-            boundary_tolerance: int, shift tolerance of boundary pixels, only valid when mode='line'
+            mode: 'area' / 'centroid' / 'curve', evaluate area / centroid indicated position / curve
+            tolerance: int, shift tolerance, only valid when mode='centroid' / 'curve'
         Note:
+            D + 1 is not supported in 'centroid' mode
             pd/gt can be giveb by:
                 - a label map of dimension D, with 0 indicating the background
                 - a binary map of demension (D+1) with each instance occupying one channel of the first dimension
@@ -58,16 +60,22 @@ class Sample(object):
         '''
 
         assert (pd is not None) and (gt is not None)
+        assert (pd.ndim == gt.ndim)
+        assert (gt.ndim == dimension) or (gt.ndim == dimension+1)
 
-        self.dimension = dimension
+        self.ndim = dimension
         self.mode = mode
-        self.boundary_tolerance = boundary_tolerance
-        self.is_label_map = (pd.ndim == dimension)
+        self.tolerance = tolerance
+        # self.is_label_map = (pd.ndim == dimension)
+        self.matched_gt = False
+        self.matched_pd = False
 
-        if self.is_label_map:
+        if pd.ndim == dimension:
             self.gt, self.pd = gt.astype(np.uint16), pd.astype(np.uint16)
-            self.area_gt = {l: c for l, c in zip(*np.unique(self.gt, return_counts=True)) if l != 0}
-            self.area_pd = {l: c for l, c in zip(*np.unique(self.pd, return_counts=True)) if l != 0}
+            objs_gt = regionprops(self.gt)
+            self.area_gt = {obj.label: obj.area for obj in objs_gt}
+            objs_pd = regionprops(self.pd)
+            self.area_pd = {obj.label: obj.area for obj in objs_pd}
         else:
             self.gt, self.pd = gt > 0, pd > 0
             self.area_gt = np.sum(self.gt, axis=tuple(range(1, 1+dimension)))
@@ -75,8 +83,7 @@ class Sample(object):
             self.area_pd = np.sum(self.pd, axis=tuple(range(1, 1+dimension)))
             self.area_pd = {l: c for l, c in enumerate(self.area_pd) if c!=0}
         
-        self.label_gt, self.label_pd = list(self.area_gt.keys()), list(self.area_pd.keys())
-        self.num_gt, self.num_pd = len(self.label_gt), len(self.label_pd)
+        self.num_gt, self.num_pd = len(self.area_gt), len(self.area_pd)
 
         # the max-overlap match is not symmetric, thus, store them separately
         self.match_pd = None  # (prediction label)-(matched gt label)
@@ -103,50 +110,92 @@ class Sample(object):
         self.match_count_gt = {}
         self.match_count_pd = {}
     
+
     def _computeMatch(self, subject='pred'):
         '''
         Args:
             subject: 'pred' or 'gt'
         '''
-        if subject == 'pred' and self.match_pd is None:
-            sub, ref, label_sub, label_ref = self.pd, self.gt, self.label_pd, self.label_gt
-        elif subject == 'gt' and self.match_gt is None:
-            sub, ref, label_sub, label_ref = self.gt, self.pd, self.label_gt, self.label_pd
+        if subject == 'pred' and self.matched_pd is False:
+            sub, ref = self.pd, self.gt
+            self.matched_pd = True
+        elif subject == 'gt' and self.matched_gt is False:
+            sub, ref = self.gt, self.pd
+            self.matched_gt = True
         else:
             return None
-
+        
         match, intersection = {}, {}
-        for l_s in label_sub:
-            if self.mode == "area":
-                if self.is_label_map:
-                    overlap = ref[np.nonzero(sub == l_s)]
+
+        if self.mode == "area":
+            
+            if self.pd.ndim == self.ndim:
+                for r in regionprops(sub):
+                    overlap = ref[tuple(r.coords[:,i] for i in range(self.ndim))]    
                     overlap = overlap[np.nonzero(overlap)]
                     if len(overlap) == 0:
-                        match[l_s], intersection[l_s] = None, 0
+                        match[r.label], intersection[r.label] = None, 0
                     else:
                         values, counts = np.unique(overlap, return_counts=True)
                         ind = np.argmax(counts)
-                        match[l_s], intersection[l_s] = values[ind], counts[ind]
-                else:
-                    overlap = np.sum(np.multiply(ref, np.expand_dims(sub[l_s], axis=0)), axis=tuple(range(1, 1+self.dimension)))
+                        match[r.label], intersection[r.label] = values[ind], counts[ind]
+            else:
+                for i in range(len(sub)):
+                    overlap = np.sum(np.multiply(ref, np.expand_dims(sub[i], axis=0)), axis=tuple(range(1, 1+self.ndim)))
                     ind = np.argsort(overlap, kind='mergesort')
                     if overlap[ind[-1]] == 0:
-                        match[l_s], intersection[l_s] = None, 0
+                        match[i], intersection[i] = None, 0
                     else:
-                        match[l_s], intersection[l_s] = ind[-1], overlap[ind[-1]]
-            else:
+                        match[i], intersection[i] = ind[-1], overlap[ind[-1]]
+        
+        elif self.mode == "centroid":
+
+            r_sub = regionprops(sub)
+            label_sub = [r.label for r in r_sub] 
+            pt_sub = np.array([r.centroid for r in r_sub])
+            
+            r_ref = regionprops(ref)
+            label_ref = [r.label for r in r_ref] 
+            pt_ref = np.array([r.centroid for r in r_ref])
+
+            bpGraph = distance_matrix(pt_sub, pt_ref) < self.tolerance
+            _, match_gp = GFG(bpGraph).maxBPM()
+
+            match, intersection = {l: None for l in label_sub}, {l: 0 for l in label_sub}
+            for i_ref, i_sub in enumerate(match_gp):
+                if i_sub != -1:
+                    match[label_sub[i_sub]] = label_ref[i_ref]
+                    intersection[label_sub[i_sub]] = 1
+
+        elif self.mode == 'area':
+
+            if self.pd.ndim == self.ndim:
+                for r_sub in regionprops(sub):    
+                    overlap, labels = [], []
+                    for r_ref in regionprops(sub):
+                        bpGraph = distance_matrix(r_sub.coords, r_ref.coords) < self.tolerance
+                        match_num, _ = GFG(bpGraph).maxBPM()
+                        overlap.append(match_num)
+                        labels.append(r_ref.label)
+                    ind = np.argsort(np.array(overlap), kind='mergesort')
+                    if overlap[ind[-1]] == 0:
+                        match[r_sub.label], intersection[r_sub.label] = None, 0
+                    else:
+                        match[r_sub.label], intersection[r_sub.label] = labels[ind[-1]], overlap[ind[-1]]
+            else:    
                 overlap = []
-                pts_sub = np.transpose(np.array(np.nonzero(sub==l_s if self.is_label_map else sub[l_s])))
-                for l_r in label_ref:
-                    pts_ref = np.transpose(np.array(np.nonzero(ref==l_r if self.is_label_map else ref[l_r])))
-                    bpGraph = distance_matrix(pts_sub, pts_ref) < self.boundary_tolerance
-                    overlap.append(GFG(bpGraph).maxBPM())
-                
-                ind = np.argsort(np.array(overlap), kind='mergesort')
-                if overlap[ind[-1]] == 0:
-                    match[l], intersection[l] = None, 0
-                else:
-                    match[l], intersection[l] = label_ref[int(ind)], overlap[ind[-1]]
+                for i_sub in range(len(sub)):
+                    pts_sub = np.transpose(np.array(np.nonzero(sub[i_sub])))
+                    for i_ref in range(len(ref)):
+                        pts_ref = np.transpose(np.array(np.nonzero(ref[i_ref])))
+                        bpGraph = distance_matrix(pts_sub, pts_ref) < self.tolerance
+                        match_num, _ = GFG(bpGraph).maxBPM()
+                        overlap.append(match_num)
+                    ind = np.argsort(np.array(overlap), kind='mergesort')
+                    if overlap[ind[-1]] == 0:
+                        match[i_sub], intersection[i_sub] = None, 0
+                    else:
+                        match[i_sub], intersection[i_sub] = ind[-1], overlap[ind[-1]]
 
         if subject == 'pred':
             self.match_pd, self.intersection_pd = match, intersection
@@ -164,6 +213,7 @@ class Sample(object):
             self._computeMatch('gt')
             self.precision_gt = {k: self.intersection_gt[k] / self.area_gt[k] for k in self.match_gt.keys()}
 
+
     def _computeRecall(self, subject='pred'):
 
         if subject == 'pred' and self.recall_pd is None:    
@@ -177,6 +227,7 @@ class Sample(object):
             self.recall_gt = {}
             for k, m in self.match_gt.items():
                 self.recall_gt[k] = self.intersection_gt[k] / self.area_pd[m] if m is not None else 0
+
 
     def _computeF1(self, subject='pred'):
 
@@ -193,6 +244,7 @@ class Sample(object):
             for k, p in self.precision_gt.items():
                 self.f1_gt[k] = 2*(p*self.recall_gt[k])/(p + self.recall_gt[k] + 1e-8)
     
+
     def _computeJaccard(self, subject='pred'):
         
         self._computeMatch(subject)
@@ -218,9 +270,11 @@ class Sample(object):
         else:
             self.jaccard_gt = jaccard
 
+
     def _computeDice(self, subject='pred'):
 
         self._computeMatch(subject)
+
         if subject == 'pred' and self.dice_pd is None:
             match, intersection = self.match_pd, self.intersection_pd
             area_sub, area_ref = self.area_pd, self.area_gt
@@ -240,7 +294,11 @@ class Sample(object):
         else:
             self.dice_gt = dice
         
+
     def averageSegPrecision(self, subject='pred'):
+
+        if self.mode == 'centroid':
+            raise Exception("averageSegPrecision is not a valid score in 'centroid' mode")
 
         self._computePrecision(subject)
         if subject == 'pred':
@@ -248,22 +306,35 @@ class Sample(object):
         else:
             return np.mean(list(self.precision_gt.values()))
 
+
     def averageSegRecall(self, subject='pred'):
+
+        if self.mode == 'centroid':
+            raise Exception("averageSegRecall is not a valid score in 'centroid' mode")
+        
         self._computeRecall(subject)
         if subject == 'pred':
             return np.mean(list(self.recall_pd.values()))
         else:
-            return np.mean(list(self.recall_gt.values()))    
+            return np.mean(list(self.recall_gt.values())) 
+             
 
     def averageSegF1(self, subject='pred'):
 
+        if self.mode == 'centroid':
+            raise Exception("averageSegF1 is not a valid score in 'centroid' mode")
+        
         self._computeF1(subject)
         if subject == 'pred':
             return np.mean(list(self.f1_pd.values()))
         else:
             return np.mean(list(self.f1_gt.values()))
+        
 
     def averageJaccard(self, subject='pred'):
+
+        if self.mode == 'centroid':
+            raise Exception("averageJaccard is not a valid score in 'centroid' mode")
     
         self._computeJaccard(subject)
         if subject == 'pred':
@@ -271,7 +342,11 @@ class Sample(object):
         else:
             return np.mean(list(self.jaccard_gt.values()))
 
+
     def averageDice(self, subject='pred'):
+
+        if self.mode == 'centroid':
+            raise Exception("averageDice is not a valid score in 'centroid' mode")
 
         self._computeDice(subject)
         if subject == 'pred':
@@ -279,6 +354,7 @@ class Sample(object):
         else:
             return np.mean(list(self.dice_gt.values()))
     
+
     def accumulate_area(self):
 
         if self.agg_intersection is None or self.agg_area is None or self.agg_union is None:
@@ -301,13 +377,19 @@ class Sample(object):
             self.agg_area += agg_ex
         return self.agg_intersection, self.agg_union, self.agg_area
 
+
     def aggregatedJaccard(self):
         '''  
         Reference:
             A Dataset and a Technique for Generalized Nuclear Segmentation for Computational Pathology
         '''
+
+        if self.mode == 'centroid':
+            raise Exception("aggregatedJaccard is not a valid score in 'centroid' mode")
+
         agg_intersection, agg_union, _ = self.accumulate_area()
         return agg_intersection/agg_union
+
 
     def aggregatedDice(self):
         ''' 
@@ -315,11 +397,20 @@ class Sample(object):
         Reference:
             CNN-BASED PREPROCESSING TO OPTIMIZE WATERSHED-BASED CELL SEGMENTATION IN 3D CONFOCAL MICROSCOPY IMAGES
         '''
+
+        if self.mode == 'centroid':
+            raise Exception("aggregatedDice is not a valid score in 'centroid' mode")
+
         agg_intersection, _, agg_area = self.accumulate_area()
         return 2*agg_intersection/agg_area
 
+
     def SBD(self):
+
+        if self.mode == 'centroid':
+            raise Exception("SBD is not a valid score in 'centroid' mode")
         return min(self.averagedDice('pred'), self.averagedDice('gt'))
+
 
     def match_num(self, thres, metric='Jaccard'):
         '''
@@ -332,37 +423,52 @@ class Sample(object):
         if thres not in self.match_count_gt.keys() or thres not in self.match_count_pd.keys():
             match_count = 0
             match_pd = []
-            if metric.lower() == 'f1':
-                self._computeF1('gt')
-                score = self.f1_gt 
-            elif metric.lower() == 'jaccard':
-                self._computeJaccard('gt')
-                score = self.jaccard_gt
-            elif metric.lower() == 'dice':
-                self._computeDice('gt')
-                score = self.dice_gt
-            for k, s in score.items():
-                if s >= thres:
-                    match_count += 1
-                    match_pd.append(self.match_gt[k])
+            if self.mode == 'centroid':
+                self._computeMatch('gt')
+                for sub, ref in self.match_gt.items():
+                    if ref is not None:
+                        match_count += 1
+                        match_pd.append(ref)
+            else:
+                if metric.lower() == 'f1':
+                    self._computeF1('gt')
+                    score = self.f1_gt 
+                elif metric.lower() == 'jaccard':
+                    self._computeJaccard('gt')
+                    score = self.jaccard_gt
+                elif metric.lower() == 'dice':
+                    self._computeDice('gt')
+                    score = self.dice_gt
+                for k, s in score.items():
+                    if s >= thres:
+                        match_count += 1
+                        match_pd.append(self.match_gt[k])
             self.match_count_gt[thres] = match_count
             self.match_count_pd[thres] = len(np.unique(match_pd))
 
         return self.match_count_gt[thres], self.match_count_pd[thres]
 
+
     def detectionPrecision(self, thres=0.5, metric='Jaccard'):
 
         match_count_gt, match_count_pd = self.match_num(thres=thres, metric=metric)
-        return match_count_gt/(self.num_gt + self.num_pd - match_count_pd)
+        union = self.num_gt + self.num_pd - match_count_pd
+        # it is possible that gt, pred are both empty
+        P = match_count_gt/union if union > 0 else 1
+        return P
+
 
     def AP(self, thres=None, metric='Jaccard'):
         '''
         Reference about P, AP, mAP:
             https://www.kaggle.com/c/data-science-bowl-2018/overview/evaluation
         '''
-        thres = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95] if thres is None else thres
-        Ps = [self.detectionPrecision(thres=t, metric=metric) for t in thres]
-        return np.mean(Ps)
+        if self.mode == 'centroid':
+            return self.detectionPrecision()
+        else:
+            thres = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95] if thres is None else thres
+            Ps = [self.detectionPrecision(thres=t, metric=metric) for t in thres]
+            return np.mean(Ps)
 
 
 class GFG(object):   
@@ -392,7 +498,7 @@ class GFG(object):
                    recursive call will not get job 'v' again'''
                 if matchR[v] == -1 or self.bpm(matchR[v], matchR, seen): 
                     matchR[v] = u 
-                    return True
+                    return True, v
         return False
     
     def maxBPM(self): 
@@ -407,15 +513,16 @@ class GFG(object):
             # Find if the applicant 'u' can get a job 
             if self.bpm(i, matchR, seen): 
                 result += 1
-        return result 
+        return result, matchR 
 
 class Evaluator(object):
 
-    def __init__(self, dimension=2, mode='area', boundary_tolerance=3, verbose=True):
 
-        self.dimension = dimension
+    def __init__(self, dimension=2, mode='area', tolerance=3, verbose=True):
+
+        self.ndim = dimension
         self.mode = mode
-        self.boundary_tolerance = boundary_tolerance
+        self.tolerance = tolerance
 
         self.examples = []
         self.total_pd = 0
@@ -425,12 +532,25 @@ class Evaluator(object):
         
 
     def add_example(self, pred, gt):
-        e = Sample(pred, gt, dimension=self.dimension, mode=self.mode, boundary_tolerance=self.boundary_tolerance)
+        e = Sample(pred, gt, dimension=self.ndim, mode=self.mode, tolerance=self.tolerance)
         self.examples.append(e)
         self.total_pd += e.num_pd
         self.total_gt += e.num_gt
         if self.verbose:
             print("example added, total: ", len(self.examples))
+
+
+    def mP(self, thres=0.5, metric='Jaccard'):
+        '''
+        mean precision over images
+        '''
+        Ps = [e.detectionPrecision(thres, metric) for e in self.examples]
+        
+        mP = np.mean(Ps)
+        if self.verbose:
+            print('detection precision under {} '.format(thres) + metric + ': {}'.format(mP) )
+        return mP
+
 
     def mAP(self, thres=None, metric='Jaccard'):
 
@@ -439,51 +559,42 @@ class Evaluator(object):
         Reference about P, AP, mAP:
             https://www.kaggle.com/c/data-science-bowl-2018/overview/evaluation
         '''
-        thres = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9] if thres is None else thres
-        APs = [e.AP(thres=thres, metric=metric) for e in self.examples]
+        if self.mode == 'centroid':
+            APs = [e.AP() for e in self.examples]
+        else:
+            thres = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9] if thres is None else thres
+            APs = [e.AP(thres=thres, metric=metric) for e in self.examples]
+        
         mAP = np.mean(APs)
         if self.verbose:
             print('mAP (mean average precision): ', mAP)
         return mAP
 
-    def averagePrecision(self, thres=None, metric='Jaccard'):
-        '''
-        AP over the whole dataset
-        Reference about P, AP, mAP:
-            https://www.kaggle.com/c/data-science-bowl-2018/overview/evaluation
-        '''
-
-        thres = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9] if thres is None else thres
-        Ps = []
-        for t in thres:
-            match_count_gt = 0
-            match_count_pd = 0
-            for e in self.examples:
-                match_count_gt_, match_count_pd_ = e.match_num(thres=t, metric=metric)
-                match_count_gt += match_count_gt_
-                match_count_pd += match_count_pd_
-
-            Ps.append(match_count_gt/(self.total_gt + self.total_pd - match_count_pd))
-        AP = np.mean(Ps)
-        if self.verbose:
-            print('AP (average precision) over the whole dataset: ', AP)
-        return AP
 
     def mAJ(self):
         '''
         mean aggregated Jaccard
         '''
+
+        if self.mode == 'centroid':
+            raise Exception("mAJ is not a valid score in 'centroid' mode")
+
         AJs = [e.aggregatedJaccard() for e in self.examples]
         mAJ = np.mean(AJs)
         if self.verbose:
             print('mAJ (mean aggregated Jaccard): ', mAJ)
         return mAJ    
     
+
     def aggregatedJaccard(self):
         '''  
         Reference:
             A Dataset and a Technique for Generalized Nuclear Segmentation for Computational Pathology
         '''
+
+        if self.mode == 'centroid':
+            raise Exception("aggregatedJaccard is not a valid score in 'centroid' mode")
+
         agg_intersection, agg_union = 0, 0
         for e in self.examples:
             agg_i, agg_u, _ = e.accumulate_area()
@@ -494,14 +605,20 @@ class Evaluator(object):
 
         return agg_intersection/agg_union
     
+
     def mAD(self):
         '''
         mean aggregated Dice
         '''
+
+        if self.mode == 'centroid':
+            raise Exception("mAD is not a valid score in 'centroid' mode")
+
         ADs = [e.aggregatedDice() for e in self.examples]
         mAD = np.mean(ADs)
         print('mAD (mean aggregated Dice): ', mAD)
         return mAD 
+
 
     def aggregatedDice(self):
         ''' 
@@ -509,6 +626,10 @@ class Evaluator(object):
         Reference:
             CNN-BASED PREPROCESSING TO OPTIMIZE WATERSHED-BASED CELL SEGMENTATION IN 3D CONFOCAL MICROSCOPY IMAGES
         '''
+
+        if self.mode == 'centroid':
+            raise Exception("aggregatedDice is not a valid score in 'centroid' mode")
+
         agg_intersection, agg_area = 0, 0
         for e in self.examples:
             agg_i, _, agg_a = e.accumulate_area()
@@ -529,23 +650,13 @@ if __name__ == '__main__':
     #### toy test ####
     # gt = imread('./test/toy_example/gt.png')
     # pred = imread('./test/toy_example/pred.png')
-    # sample = Sample(pred, gt)
-    # subject = 'pred'
+    # sample = Sample(pred, gt, mode='area')
+    # subject = 'gt'
     # sample._computeMatch(subject=subject)
     # print(sample.match_pd, sample.intersection_pd, sample.match_gt, sample.intersection_gt)
-    # sample._computePrecision(subject=subject)
-    # sample._computeRecall(subject=subject)
-    # sample._computeF1(subject=subject)
-    # sample._computeJaccard(subject=subject)
-    # sample._computeDice(subject=subject)
-    # print('precision', sample.precision_pd, sample.precision_gt)
-    # print('recall', sample.recall_pd, sample.recall_gt)
-    # print('f1', sample.f1_pd, sample.f1_gt)
-    # print('jaccard', sample.jaccard_pd, sample.jaccard_gt)
-    # print('dice', sample.dice_pd, sample.dice_gt)
-    # print('averagePrecision', sample.averageSegPrecision(subject))
-    # print('averageRecall', sample.averageSegRecall(subject))
-    # print('averageF1', sample.averageSegF1(subject))
+    # print('averageSegPrecision', sample.averageSegPrecision(subject))
+    # print('averageSegRecall', sample.averageSegRecall(subject))
+    # print('averageSegF1', sample.averageSegF1(subject))
     # print('averageJaccard', sample.averageJaccard(subject))
     # print('averageDice', sample.averageDice(subject))
     # print('aggregatedJaccard', sample.aggregatedJaccard())
@@ -559,15 +670,15 @@ if __name__ == '__main__':
     f_preds = sorted(glob.glob('./test/cell/pred/*.tif'))[0:50]
 
     # evalation of a whole dataset
-    e = Evaluator(dimension=2, mode='area')
+    e = Evaluator(dimension=2, mode='centroid')
     for f_gt, f_pred in zip(f_gts, f_preds):
         pred = imread(f_pred)
         gt = imread(f_gt)
         # add one segmentation
         e.add_example(pred, gt)
 
+    e.mP()
     e.mAP()
-    e.averagePrecision()
     e.mAJ()
     e.aggregatedJaccard()
     e.mAD()
