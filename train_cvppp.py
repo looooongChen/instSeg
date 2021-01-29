@@ -1,121 +1,145 @@
 
 import instSeg
-import csv
-import glob
+from skimage.io import imsave
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
-from skimage.color import label2rgb
-from skimage.measure import label
-from instSeg.post_process import *
 import os
+import csv
+import time
 
-config = instSeg.Config(semantic=False, dist=True, embedding=True)
-config.module_order = ['dist', 'semantic', 'embedding']
-config.feature_forward_dimension = 32
-run_name = 'cvppp_dft_stagewise'
-ds_dir = './ds_cvppp'
+config = instSeg.ConfigParallel()
+config.modules = ['embedding', 'dist']
+# config.backbone = 'uNet2H'
+config.validation_start_epoch = 150
+config.loss_embedding = 'cos'
+config.loss_dist = 'mse'
+# config.loss_dist = 'binary_crossentropy'
+config.filters = 32
+run_name = 'model_EMBcos_cvppp'
 base_dir = './'
+splits = [0,1,2]
+# splits = [0]
 
-#### cross validation ####
-for fold in range(5):
-    # model = instSeg.InstSeg_Cascade(config=config, base_dir=base_dir, run_name=run_name + '_crossval_'+str(fold))
-    model = instSeg.InstSeg_Mul(config=config, base_dir=base_dir, run_name=run_name + '_crossval_'+str(fold))
-    X_train, Y_train = [], []
-    X_val, Y_val = [], []
-    with open(os.path.join(ds_dir, 'crossval_partition.csv'), newline='') as csvfile:
-        reader = csv.reader(csvfile, delimiter=',', quotechar='|')
-        for row in reader:
-            if int(row[0]) == fold:
-                X_val.append(os.path.join(ds_dir, row[1][2:]))
-                Y_val.append(os.path.join(ds_dir, row[2][2:]))
-            else:
-                X_train.append(os.path.join(ds_dir, row[1][2:]))
-                Y_train.append(os.path.join(ds_dir, row[2][2:]))
+ds_csv = 'D:/instSeg/ds_cvppp/cvppp.csv'
+ds_dir = os.path.dirname(ds_csv)
 
-    train_data = {'image': list(map(cv2.imread,X_train)),
-                'object': list(map(lambda img: cv2.imread(img, cv2.IMREAD_GRAYSCALE),Y_train))}
-    val_data = {'image': list(map(cv2.imread,X_val)),
-                'object': list(map(lambda img: cv2.imread(img, cv2.IMREAD_GRAYSCALE),Y_val))}
-
-    # train_data = {'image': list(map(cv2.imread,X_train))[:40],
-    #             'object': list(map(lambda img: cv2.imread(img, cv2.IMREAD_GRAYSCALE),Y_train))[:40]}
-    # val_data = {'image': list(map(cv2.imread,X_val))[:40],
-    #             'object': list(map(lambda img: cv2.imread(img, cv2.IMREAD_GRAYSCALE),Y_val))[:40]}
-
-    # model.train(train_data, val_data, batch_size=4, epochs=300, augmentation=False)
-    model.stagewise_train(train_data, val_data, batch_size=4, epochs=50, augmentation=False)
-    # model.save_model(stage_wise=True, save_best=False)
-
-#### training ####
-
-# dirs = ['A1', 'A2', 'A3', 'A4']
-
-# X, Y = [], []
-# for d in dirs:
-#     X = X + sorted(glob.glob('./ds_cvppp/training_images/'+d+'/*.png'))
-#     Y = Y + sorted(glob.glob('./ds_cvppp/training_truth/'+d+'/*.png'))
-# train_data = {'image': list(map(cv2.imread,X)),
-#               'object': list(map(lambda img: cv2.imread(img, cv2.IMREAD_GRAYSCALE),Y))}
-
-# model.train(train_data, val_data, batch_size=4, epochs=500, augmentation=False)
-
-#### test ####
-
-# use_gt_fg = True
-# model.load_weights()
-
-# save_dir= './ds_cvppp/testing_seg/'
-# vis_dir= './ds_cvppp/testing_vis/'
-# if not os.path.exists(save_dir):
-#     os.mkdir(save_dir)
-# if not os.path.exists(vis_dir):
-#     os.mkdir(vis_dir)
-
-# dirs = ['A1', 'A2', 'A3', 'A4', 'A5']
-# # dirs = ['A2', 'A3']
-
-# for d in dirs:
+# training 
+# for s in splits:
+#     # load dataset
+#     with open(ds_csv) as csv_file:
+#         csv_reader = csv.reader(csv_file, delimiter=';')
+#         X_train, y_train = [], []
+#         X_val, y_val = [], []
+#         for row in csv_reader:
+#             if int(row[0]) == s:
+#                 X_val.append(os.path.join(ds_dir,row[1]))
+#                 y_val.append(os.path.join(ds_dir,row[2]))
+#             else:
+#                 X_train.append(os.path.join(ds_dir,row[1]))
+#                 y_train.append(os.path.join(ds_dir,row[2]))
     
-#     seg_save_dir = os.path.join(save_dir, d)
-#     vis_save_dir = os.path.join(vis_dir, d)
-#     if not os.path.exists(seg_save_dir):
-#         os.mkdir(seg_save_dir)
-#     if not os.path.exists(vis_save_dir):
-#         os.mkdir(vis_save_dir)
+#     # X_train = X_train[:20]
+#     # y_train = y_train[:20]
+#     # X_val = X_val[:20]
+#     # y_val = y_val[:20]
+
+#     imgs_train, gts_train = [], []
+#     imgs_val, gts_val = [], []
+#     for i in range(len(X_train)):
+#         img = cv2.imread(X_train[i], cv2.IMREAD_UNCHANGED)
+#         img = cv2.resize(img, (config.W, config.H), interpolation=cv2.INTER_LINEAR)
+#         imgs_train.append(img)
+#         gt = cv2.imread(y_train[i], cv2.IMREAD_UNCHANGED)
+#         gt = cv2.resize(gt, (config.W, config.H), interpolation=cv2.INTER_NEAREST)
+#         gts_train.append(gt)
+#     for i in range(len(X_val)):
+#         img = cv2.imread(X_val[i], cv2.IMREAD_UNCHANGED)
+#         img = cv2.resize(img, (config.W, config.H), interpolation=cv2.INTER_LINEAR)
+#         imgs_val.append(img)
+#         gt = cv2.imread(y_val[i], cv2.IMREAD_UNCHANGED)
+#         gt = cv2.resize(gt, (config.W, config.H), interpolation=cv2.INTER_NEAREST)
+#         gts_val.append(gt)
+#     imgs_train, gts_train = np.array(imgs_train), np.array(gts_train)
+#     imgs_val, gts_val = np.array(imgs_val), np.array(gts_val)
+  
+
+#     train_ds = {'image': imgs_train,
+#                 'instance': gts_train}
+#     val_ds = {'image': imgs_val,
+#               'instance': gts_val}
     
-#     files = sorted(glob.glob('./ds_cvppp/testing_images/'+d+'/*.png'))
-#     if use_gt_fg:
-#         files_fg = sorted(glob.glob('./ds_cvppp/testing_images_fg/'+d+'/*.png'))
+#     # create model and train
+#     model = instSeg.InstSegParallel(config=config, base_dir=base_dir, run_name=run_name+'_'+str(s))
+#     model.train(train_ds, val_ds, batch_size=4, epochs=300, augmentation=False)
+#     # model.train(train_ds, batch_size=4, epochs=300, augmentation=False)
+
+
+# evalutation
+
+eval_dir = 'eval'+run_name[5:]
+if not os.path.exists(eval_dir):
+    os.makedirs(eval_dir)
+
+e = instSeg.Evaluator(dimension=2, mode='area', verbose=False)
+model_load_time = 0
+image_load_time = 0
+image_seg_time = 0
+
+with open(ds_csv) as csv_file:
+    csv_reader = csv.reader(csv_file, delimiter=';')
+    idx_spilt, img_path, gt_path = [], [], []
+    for row in csv_reader:
+        idx_spilt.append(int(row[0]))
+        img_path.append(row[1])
+        gt_path.append(row[2])
+
+t = time.time()
+
+for s in splits:
     
-#     for i in range(len(files)):
-#         print(files[i])
-#         img = cv2.imread(files[i])
-#         if use_gt_fg:
-#             fg = cv2.imread(files_fg[i], cv2.IMREAD_GRAYSCALE)
-#             seg, pred = model.predict(img, thres=0.7, similarity_thres=0.7, semantic_mask=fg>0)
-#         else:
-#             seg, pred = model.predict(img, thres=0.7, similarity_thres=0.7)
-#         seg = cv2.resize(seg, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
-#         if np.sum(seg) == 0:
-#             print('empty')
-#             seg[0,0]=1
-#         cv2.imwrite(os.path.join(seg_save_dir, os.path.basename(files[i])), seg)
+    tt = time.time()
+    model = instSeg.InstSegParallel(config=config, base_dir=base_dir, run_name=run_name+'_'+str(s))
+    model.load_weights(load_best=False)
+    model_load_time += (time.time()-tt)
 
-#         vis = label2rgb(seg, bg_label=0)
-#         vis = vis * 255 / vis.max()
-#         cv2.imwrite(os.path.join(vis_save_dir, os.path.basename(files[i])), vis)
+    for i, ss in enumerate(idx_spilt):
+        if ss != s:
+            continue
+        print(i, img_path[i])
+        # load image
+        tt = time.time()
+        img = cv2.imread(os.path.join(ds_dir,img_path[i]), cv2.IMREAD_UNCHANGED)
+        image_load_time += (time.time()-tt)
+        gt = cv2.imread(os.path.join(ds_dir,gt_path[i]), cv2.IMREAD_UNCHANGED)
+        # process
+        tt = time.time()
+        instance, raw = model.predict(img)
+        image_seg_time += (time.time()-tt)
+        # eval
+        # e.add_example(instance, gt)
+        # vis instance
+        # vis = instSeg.vis.vis_instance_area(img, instance)
+        # vis = instSeg.vis.vis_instance_contour(vis, gt, color='red')
+        # imsave(os.path.join(eval_dir, 'example_{:04d}.png'.format(i)), vis)
+        print(raw[0].shape, raw[1].shape)
+        imsave(os.path.join(eval_dir, 'img_{:04d}.png'.format(i)), img)
+        imsave(os.path.join(eval_dir, 'dist_{:04d}.png'.format(i)), raw[1][0,:,:,0])
+        imsave(os.path.join(eval_dir, 'dist_t_{:04d}.png'.format(i)), np.array(raw[1][0,:,:,0])>0.5)
+        imsave(os.path.join(eval_dir, 'inst_{:04d}.png'.format(i)), instance)
+        instance2 = np.squeeze(np.argmax(raw[0], axis=-1))
+        imsave(os.path.join(eval_dir, 'inst2_{:04d}.png'.format(i)), instance2)
+        break
 
-#         # cv2.imwrite(os.path.join(vis_save_dir, os.path.basename(files[i])[:-4]+'_dist.png'), pred['dist']*25)
-#         # emb = pred['embedding'][:,:,0:3]
-#         # emb = (emb - emb.min())/(emb.max()-emb.min()) * 255
-#         # cv2.imwrite(os.path.join(vis_save_dir, os.path.basename(files[i])[:-4]+'_emb.png'), vis.astype(np.uint8))
 
-# # plt.subplot(1,3,1)
-# # plt.imshow(img)
-# # plt.subplot(1,3,2)
-# # plt.imshow(np.squeeze(np.argmax(pred['semantic'], axis=-1))*255)
-# # plt.subplot(1,3,3)
-# # plt.imshow(label2rgb(seg, bg_label=0))
-# # # plt.imshow(seg)
-# # plt.show()
+# with open(os.path.join(eval_dir, "eval_"+run_name+".txt"), "w") as f:
+#     f.write("model loading time {:} \r\n".format(model_load_time/len(splits)))
+#     f.write("image loading time {:} \r\n".format(image_load_time/len(img_path)))
+#     f.write("image processing time {:} \r\n".format(image_seg_time/len(img_path)))
+#     f.write("mAP {:} \r\n".format(e.mAP()))
+#     f.write("AP {:} \r\n".format(e.AP()))
+#     f.write("mP 0.5thres: {:}, 0.6thres: {:}, 0.7thres: {:}, 0.8thres: {:}, 0.9thres: {:} \r\n".format(e.P(0.5), e.P(0.6), e.P(0.7), e.P(0.8), e.P(0.9)))
+#     f.write("detection Sensitivity 0.5thres: {:}, 0.6thres: {:}, 0.7thres: {:}, 0.8thres: {:}, 0.9thres: {:} \r\n".format(e.detectionSensitivity(0.5), e.detectionSensitivity(0.6), e.detectionSensitivity(0.7), e.detectionSensitivity(0.8), e.detectionSensitivity(0.9)))
+#     f.write("detection Accuracy 0.5thres: {:}, 0.6thres: {:}, 0.7thres: {:}, 0.8thres: {:}, 0.9thres: {:} \r\n".format(e.detectionAccuracy(0.5), e.detectionAccuracy(0.6), e.detectionAccuracy(0.7), e.detectionAccuracy(0.8), e.detectionAccuracy(0.9)))
+#     f.write("mAJ {:} \r\n".format(e.mAJ()))
+#     f.write("AJ {:} \r\n".format(e.aggregatedJaccard()))
+        

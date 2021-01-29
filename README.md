@@ -1,5 +1,7 @@
-# InstNetV2
-InstNetV2: an CNN framework for instance segmtnation 
+# instSeg
+a collection implementatsions of deep learning approaches for instance segmentation of biomedical images
+
+instSegDCAN: DCAN: Deep Contour-Aware Networks for Accurate Gland Segmentation
 
 
 ## Overview:

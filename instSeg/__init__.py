@@ -1,6 +1,8 @@
 name = "instSeg"
 
-from instSeg.config import Config, ConfigContour
-# from instSeg.model_cascade import InstSegCascade
-# from instSeg.model_mul import InstSegMul
-from instSeg.model_dcan import InstSegDCAN
+from instSeg.config import Config, ConfigParallel, ConfigCascade
+from instSeg.model_cascade import InstSegCascade
+from instSeg.model_parallel import InstSegParallel
+
+from instSeg.evaluation import Evaluator
+from instSeg import visualization as vis

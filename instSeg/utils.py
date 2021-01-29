@@ -73,7 +73,7 @@ def adj_matrix_np(labels, radius, max_obj=300):
         X, Y = np.meshgrid(np.arange(0, l.shape[0]), np.arange(0, l.shape[1]), indexing='ij')
         label_stack[l.flatten(), X.flatten(), Y.flatten()] = 1
         for i in range(label_depth):
-            label_stack[i] = cv2.dilate(label_stack[i], disk_np(radius),iterations = 1)
+            label_stack[i] = cv2.dilate(label_stack[i], disk_np(radius), iterations = 1)
         label_stack = label_stack * np.moveaxis(l, -1, 0)
         adj = np.zeros((max_obj, max_obj), np.bool)
         for i in range(label_depth):

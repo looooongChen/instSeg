@@ -388,7 +388,10 @@ class Sample(object):
             raise Exception("aggregatedJaccard is not a valid score in 'centroid' mode")
 
         agg_intersection, agg_union, _ = self.accumulate_area()
-        return agg_intersection/agg_union
+        if agg_intersection == 0 and agg_union == 0:
+            return 1
+        else:
+            return agg_intersection/agg_union
 
 
     def aggregatedDice(self):
@@ -402,7 +405,10 @@ class Sample(object):
             raise Exception("aggregatedDice is not a valid score in 'centroid' mode")
 
         agg_intersection, _, agg_area = self.accumulate_area()
-        return 2*agg_intersection/agg_area
+        if agg_intersection == 0 and agg_union == 0:
+            return 1
+        else:
+            return 2*agg_intersection/agg_area
 
 
     def SBD(self):
@@ -448,11 +454,22 @@ class Sample(object):
 
         return self.match_count_gt[thres], self.match_count_pd[thres]
 
+    def detectionSensitivity(self, thres=0.5, metric='Jaccard'):
+        match_count_gt, _ = self.match_num(thres=thres, metric=metric)
+        # it is possible that gt, pred are both empty
+        S = match_count_gt/self.num_gt if self.num_gt > 0 else 1
+        return S
 
-    def detectionPrecision(self, thres=0.5, metric='Jaccard'):
+    def detectionAccuracy(self, thres=0.5, metric='Jaccard'):
+        match_count_gt, _ = self.match_num(thres=thres, metric=metric)
+        # it is possible that gt, pred are both empty
+        A = match_count_gt/self.num_pd if self.num_pd > 0 else 1
+        return A
 
-        match_count_gt, match_count_pd = self.match_num(thres=thres, metric=metric)
-        union = self.num_gt + self.num_pd - match_count_pd
+    def P(self, thres=0.5, metric='Jaccard'):
+
+        match_count_gt, _ = self.match_num(thres=thres, metric=metric)
+        union = self.num_gt + self.num_pd - match_count_gt
         # it is possible that gt, pred are both empty
         P = match_count_gt/union if union > 0 else 1
         return P
@@ -464,10 +481,10 @@ class Sample(object):
             https://www.kaggle.com/c/data-science-bowl-2018/overview/evaluation
         '''
         if self.mode == 'centroid':
-            return self.detectionPrecision()
+            return self.P()
         else:
             thres = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95] if thres is None else thres
-            Ps = [self.detectionPrecision(thres=t, metric=metric) for t in thres]
+            Ps = [self.P(thres=t, metric=metric) for t in thres]
             return np.mean(Ps)
 
 
@@ -539,18 +556,55 @@ class Evaluator(object):
         if self.verbose:
             print("example added, total: ", len(self.examples))
 
+    def detectionSensitivity(self, thres=0.5, metric='Jaccard'):
 
-    def mP(self, thres=0.5, metric='Jaccard'):
-        '''
-        mean precision over images
-        '''
-        Ps = [e.detectionPrecision(thres, metric) for e in self.examples]
-        
-        mP = np.mean(Ps)
+        match_count, num_gt = 0, 0
+        for e in self.examples:
+            match_count_gt, _ = e.match_num(thres=thres, metric=metric)
+            match_count += match_count_gt
+            num_gt += e.num_gt
+        S = match_count/num_gt if num_gt > 0 else 1
         if self.verbose:
-            print('detection precision under {} '.format(thres) + metric + ': {}'.format(mP) )
-        return mP
+            print("detectionSensitivity over the whole dataset under '" + metric + "' {}: {}".format(thres, S))
+        return S
 
+    def detectionAccuracy(self, thres=0.5, metric='Jaccard'):
+
+        match_count, num_pd = 0, 0
+        for e in self.examples:
+            match_count_gt, _ = e.match_num(thres=thres, metric=metric)
+            match_count += match_count_gt
+            num_pd += e.num_pd
+        A = match_count/num_pd if num_pd > 0 else 1
+        if self.verbose:
+            print("detectionAccuracy over the whole dataset under '" + metric + "' {}: {}".format(thres, A))
+        return A
+
+    def P(self, thres=0.5, metric='Jaccard'):
+
+        match_count, num_pd, num_gt = 0, 0, 0
+        for e in self.examples:
+            match_count_gt, _ = e.match_num(thres=thres, metric=metric)
+            match_count += match_count_gt
+            num_pd += e.num_pd
+            num_gt += e.num_gt
+        union = num_gt + num_pd - match_count
+        # it is possible that gt, pred are both empty
+        P = match_count/union if union > 0 else 1
+        if self.verbose:
+            print("P (detection precision) over the whole dataset under '" + metric + "' {}: {}".format(thres, P))
+        return P
+
+    def AP(self, thres=None, metric='Jaccard'):
+        if self.mode == 'centroid':
+            AP = self.P()
+        else:
+            thres = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95] if thres is None else thres
+            Ps = [self.P(thres=t, metric=metric) for t in thres]
+            AP = np.mean(Ps)
+        if self.verbose:
+            print('AP (average detection precision) over the whole dataset: ', AP)
+        return AP
 
     def mAP(self, thres=None, metric='Jaccard'):
 
@@ -661,7 +715,7 @@ if __name__ == '__main__':
     # print('averageDice', sample.averageDice(subject))
     # print('aggregatedJaccard', sample.aggregatedJaccard())
     # print('aggregatedDice', sample.aggregatedDice())
-    # print('detectionPrecision', sample.detectionPrecision())
+    # print('P', sample.P())
     # print('AP', sample.AP())
 
 

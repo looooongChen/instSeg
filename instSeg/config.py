@@ -7,17 +7,42 @@ class Config(object):
     def __init__(self, image_channel=3):
 
         self.verbose = False
-        self.save_best_metric = 'mAJ' # 'loss'/'mAJ'/'mAP'
+
+        self.save_best_metric = 'mAJ' # 'mAJ'/'mAP'/'loss'
         # input size
         self.H = 512
         self.W = 512
         self.image_channel = image_channel
         
         # backbone config
-        self.backbone = 'uNet'
+        self.backbone = 'uNet' # 'uNet2H', 'uNetSA', 'uNnetD'
         self.dropout_rate = 0.5
-        self.batch_norm=False
+        self.batch_norm = True
         self.filters = 32
+        self.net_upsample = 'interp' # 'interp', 'conv'
+        self.net_merge = 'cat' # 'add', 'cat'
+
+        # losses
+        self.focal_loss_gamma = 2.0
+        self.sensitivity_specificity_loss_beta = 1.0
+        ## semantic loss
+        self.classes = 2
+        self.loss_semantic = 'dice_loss'
+        self.weight_semantic = 1
+        ## contour loss
+        self.loss_contour = 'focal_loss'
+        self.weight_contour = 1
+        self.contour_radius = 1 
+        ## dist regression 
+        self.loss_dist = 'mse'
+        self.weight_dist = 1
+        ## embedding loss
+        self.embedding_dim = 8
+        self.loss_embedding = 'cos'
+        self.weight_embedding = 1
+        self.embedding_include_bg = True
+        self.neighbor_distance = 0.03
+        self.max_obj = MAX_OBJ
 
         # data augmentation
         self.flip = True
@@ -28,82 +53,36 @@ class Config(object):
         self.random_crop_range = (0.6, 0.8)
 
         # training config:
-        self.stagewise_training = False
         self.train_epochs = 100
         self.train_batch_size = 3
         self.train_learning_rate = 0.0001
         self.lr_decay_period = 5000
         self.lr_decay_rate = 0.9
 
+        # validation 
+        self.validation_start_epoch = 1
 
-class ConfigContour(Config):
+        # post-process
+        self.embedding_cluster = 'argmax' # 'argmax', 'meanshift', 'mws' 
+
+
+# class ConfigContour(Config):
+
+#     def __init__(self, image_channel=3):
+#         super().__init__(image_channel=image_channel)
+
+class ConfigCascade(Config):
 
     def __init__(self, image_channel=3):
         super().__init__(image_channel=image_channel)
-        # config of semantic
-        self.classes = 2
-        self.loss_semantic = 'dice_loss'
-        self.weight_semantic = 1
-        # config of contour
-        self.loss_contour = 'focal_loss'
-        self.weight_contour = 1 
-        self.contour_radius = 1 
+        self.modules = ['semantic', 'dist', 'embedding']
+        # config feature forward
+        self.feature_forward_dimension = 32
+        self.stop_gradient = True
 
-# class ConfigXXX(object):
+class ConfigParallel(Config):
 
-#     def __init__(self, image_channel=3):
+    def __init__(self, image_channel=3):
+        super().__init__(image_channel=image_channel)
+        self.modules = ['semantic', 'contour']
 
-#         self.verbose = False
-#         self.module_order = ['semantic', 'dist', 'embedding']
-
-#         # input size
-#         self.H = 512
-#         self.W = 512
-#         self.image_channel = image_channel
-        
-#         # backbone config
-#         self.dropout_rate = 0.5
-#         self.batch_norm=False
-
-#         # config feature forward
-#         self.feature_forward_dimension = 32
-#         self.stop_gradient = True
-
-#         # network config
-#         self.filters = 32
-#           
-#         # config of semantic module
-#         self.semantic = False
-#         self.classes = 1
-#         self.weight_semantic = 1 
-#         self.loss_semantic = 'dice_loss'
-#         # config of dist module
-#         self.dist = False
-#         self.weight_dist = 1
-#         self.loss_dist = 'mse'
-#         self.dist_neg_weight = 1
-#         # config of embedding module
-#         self.embedding = False
-#         self.embedding_dim = 8
-#         self.weight_embedding = 1
-#         self.loss_embedding = 'cos'
-#         self.embedding_include_bg = True
-#         self.neighbor_distance = 0.03
-#         self.max_obj = MAX_OBJ
-
-#         # data augmentation
-#         self.flip = True
-#         self.elastic_strength = 2
-#         self.elastic_scale = 10
-#         self.rotation = True
-#         self.random_crop = True
-#         self.random_crop_range = (0.6, 0.8)
-
-#         # training config:
-#         self.stagewise_training = False
-#         self.train_epochs = 100
-#         self.train_batch_size = 3
-#         self.train_learning_rate = 0.0001
-#         self.lr_decay_period = 5000
-#         self.lr_decay_rate = 0.9
-    

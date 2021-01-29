@@ -3,39 +3,34 @@ from tensorflow import keras
 import tensorflow.keras.backend as K
 from instSeg.model_base import InstSegBase 
 from instSeg.uNet import *
-from instSeg.uNetDoubleHead import *
+from instSeg.uNet2H import *
 from instSeg.utils import *
 import instSeg.loss as L
 from instSeg.post_process import *
 import os
 from skimage.measure import label as relabel
+from skimage.measure import regionprops
 from instSeg.evaluation import Evaluator
-
 import cv2
-
-try:
-    import tfAugmentor as tfaug 
-    augemntor_available = True
-except:
-    augemntor_available = False
 
 
 class InstSegDCAN(InstSegBase):
 
     def __init__(self, config, base_dir='./', run_name=''):
         super().__init__(config, base_dir, run_name)
-        self.best_score = float('inf') if self.config.save_best_metric == 'loss' else 0
 
-    def _build(self):
+    def build_model(self):
         self.input_img = keras.layers.Input((self.config.H, self.config.W, self.config.image_channel), name='input_img')
         self.normalized_img = tf.image.per_image_standardization(self.input_img)
 
         output_list = []
 
-        backbone = UNnetDoubleHead if self.config.backbone == 'uNetDoubleHead' else UNnet
+        backbone = UNnet2H if self.config.backbone == 'uNet2H' else UNnet
         self.net = backbone(filters=self.config.filters,
                             dropout_rate=self.config.dropout_rate,
                             batch_norm=self.config.batch_norm,
+                            upsample=self.config.net_upsample,
+                            merge=self.config.net_merge,
                             name='net')
                     
         self.outlayer_semantic = keras.layers.Conv2D(filters=self.config.classes, 
@@ -47,7 +42,7 @@ class InstSegDCAN(InstSegBase):
                                                     kernel_initializer='he_normal', 
                                                     name='out_contour')
 
-        if self.config.backbone == 'uNetDoubleHead':
+        if self.config.backbone == 'uNet2H':
             features1, features2 = self.net(self.normalized_img)
             out_semantic = self.outlayer_semantic(features1)
             out_contour = self.outlayer_contour(features2)
@@ -56,66 +51,11 @@ class InstSegDCAN(InstSegBase):
             out_semantic = self.outlayer_semantic(features)
             out_contour = self.outlayer_contour(features)
             
-        
-
         self.model = keras.Model(inputs=self.input_img, outputs=[out_semantic, out_contour])
         
         if self.config.verbose:
             self.model.summary()
-            tf.keras.utils.plot_model(self.model, to_file='./model.png', show_shapes=False, show_layer_names=True)
-    
-    def evaluate(self, ds):
-        '''
-        Args:
-            ds: validation dataset
-        Return:
-            improved: bool
-        '''
-        e = Evaluator(dimension=2, mode='area')
-        loss = []
-        for ds_item in ds:
-            raw = self.predict_raw(ds_item['image'])
-            instances, _, _ = self.postprocess(raw)
-            e.add_example(instances, np.squeeze(ds_item['instance']))
-            loss_semantic = self.loss_fn_semantic(ds_item['semantic'], raw[0])
-            loss_contour = self.loss_fn_contour(ds_item['contour'], raw[1])
-            loss.append(loss_semantic * self.config.weight_semantic + loss_contour * self.config.weight_contour)
-        mAP = e.mAP()
-        mAJ = e.mAJ()
-        loss = np.mean(loss)
-        return mAP, mAJ, loss
 
-
-    def _validate(self, val_ds):
-        '''
-        Args:
-            val_ds: validation dataset
-        Return:
-            improved: bool
-        '''
-        print('Running validation: ')
-        mAP, mAJ, loss = self.evaluate(val_ds)
-        # summary training loss
-        with self.val_summary_writer.as_default():
-            tf.summary.scalar('validation mAP', mAP, step=self.training_step)
-            tf.summary.scalar('validation mAJ', mAJ, step=self.training_step)
-            tf.summary.scalar('validation loss', loss, step=self.training_step)
-        # best score
-        disp = 'validation loss: {:.5f} mAP: {:.5f}, mAJ: {:.5f}'.format(loss, mAP, mAJ)
-        if self.config.save_best_metric == 'loss':
-            score = loss
-        elif self.config.save_best_metric == 'mAP':
-            score = mAP
-        else: # use mAJ
-            score= mAJ
-
-        if score > self.best_score:
-            self.best_score = score
-            print("Validation Score Improved: " + disp)
-            return True
-        else:
-            print("Validation Score Not Improved: " + disp)
-            return False
 
     def train(self, train_data, validation_data=None, epochs=None, batch_size=None,
               augmentation=True, image_summary=True):
@@ -131,10 +71,8 @@ class InstSegDCAN(InstSegBase):
         # prepare network
         if not self.training_prepared:
             self.prepare_training(semantic=True, contour=True)
-        if epochs is None:
-            epochs = self.config.train_epochs
-        if batch_size is None:
-            batch_size = self.config.train_batch_size
+        epochs = self.config.train_epochs if epochs is None else epochs
+        batch_size = self.config.train_batch_size if batch_size is None else batch_size
 
         # prepare data
         train_ds = self.ds_from_np(train_data, semantic=True, contour=True)
@@ -155,8 +93,8 @@ class InstSegDCAN(InstSegBase):
                 with tf.GradientTape() as tape:
                     outs = self.model(ds_item['image'])
                    
-                    loss_semantic = self.loss_fn_semantic(ds_item['semantic'], outs[0])
-                    loss_contour = self.loss_fn_contour(ds_item['contour'], outs[1])
+                    loss_semantic = self.loss_fns['semantic'](ds_item['semantic'], outs[0])
+                    loss_contour = self.loss_fns['contour'](ds_item['contour'], outs[1])
                     loss = loss_semantic * self.config.weight_semantic + loss_contour * self.config.weight_contour
                     
                     grads = tape.gradient(loss, self.model.trainable_weights)
@@ -188,17 +126,16 @@ class InstSegDCAN(InstSegBase):
             self.training_epoch += 1
 
             self.save_weights()
-            if validation_data:
-                improved = self._validate(val_ds)
-                if improved:
-                    self.save_weights(save_best=True)
+            self.validate(val_ds, save_best=True)
 
-    def postprocess(self, raw):
 
+    def postprocess(self, raw, min_size=20):
+
+        raw = [np.array(p) for p in raw]
         contour_thres=0.5
 
-        semantic = np.argmax(raw[0], axis=-1).astype(np.uint16)
-        contour = cv2.dilate((raw[1] > contour_thres).astype(np.uint8), disk_np(1, np.uint8), iterations = 1)
+        semantic = np.squeeze(np.argmax(raw[0], axis=-1)).astype(np.uint16)
+        contour = cv2.dilate((np.squeeze(raw[1]) > contour_thres).astype(np.uint8), disk_np(1, np.uint8), iterations = 1)
 
         instances = relabel(semantic * (contour == 0)).astype(np.uint16)
         fg = (semantic > 0).astype(np.uint16)
@@ -208,16 +145,24 @@ class InstSegDCAN(InstSegBase):
                 instances += pixel_add
             else:
                 break
+        
+        for r in regionprops(instances):
+            if r.area < min_size:
+                instances[r.coords[:,0], r.coords[:,1]] = 0
 
         return instances, semantic, contour
     
     def predict(self, image, keep_size=True):
-
-        sz = image.shape
-        raw = self.predict_raw(image)
-
-        instance, semantic, contour = self.postprocess(raw)
         
+        sz = image.shape
+        # model inference
+        img = np.squeeze(image)
+        img = image_resize_np([img], (self.config.H, self.config.W))
+        img = K.cast_to_floatx(img)
+        raw = self.model(img)
+        # post processing
+        instances, semantic, contour = self.postprocess(raw)
+        # resize to original resolution
         if keep_size:
             instances = cv2.resize(instances, (sz[1], sz[0]), interpolation=cv2.INTER_NEAREST)
             semantic = cv2.resize(semantic, (sz[1], sz[0]), interpolation=cv2.INTER_NEAREST)
