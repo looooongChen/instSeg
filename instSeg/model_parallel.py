@@ -2,41 +2,55 @@
 from tensorflow import keras
 import tensorflow.keras.backend as K
 from instSeg.model_base import InstSegMul 
+from instSeg.enumDef import *
 from instSeg.uNet import *
 from instSeg.uNet2H import *
+from instSeg.ResNetSeg import *
 from instSeg.utils import *
 import os
 
 
 class InstSegParallel(InstSegMul):
 
-    def __init__(self, config, base_dir='./', run_name=''):
-        super().__init__(config, base_dir, run_name)
+    def __init__(self, config, model_dir='./'):
+        super().__init__(config, model_dir)
+        self.config.model_type = MODEL_PARALLEL
         assert len(config.modules) == 2
 
     def build_model(self):
+
+        if self.config.backbone.startswith('resnet'):
+            assert self.config.image_channel == 3
+
         self.input_img = keras.layers.Input((self.config.H, self.config.W, self.config.image_channel), name='input_img')
         self.normalized_img = tf.image.per_image_standardization(self.input_img)
+        # self.normalized_img = self.input_img
 
         output_list = []
 
-        if self.config.backbone == 'uNet2H':
-            backbone = UNet2H 
-        elif self.config.backbone == 'uNetSA':
-            backbone = UNetSA
-        elif self.config.backbone == 'uNetD':
-            backbone = UNetD
-        elif self.config.backbone == 'uNet': 
-            backbone = UNet
+        if self.config.backbone.startswith('uNet'):
+            if self.config.backbone == 'uNet2H':
+                backbone = UNet2H 
+            elif self.config.backbone == 'uNetSA':
+                backbone = UNetSA
+            elif self.config.backbone == 'uNetD':
+                backbone = UNetD
+            elif self.config.backbone == 'uNet': 
+                backbone = UNet
+            self.net = backbone(filters=self.config.filters,
+                                dropout_rate=self.config.dropout_rate,
+                                batch_norm=self.config.batch_norm,
+                                upsample=self.config.net_upsample,
+                                merge=self.config.net_merge,
+                                name='net')
+        elif self.config.backbone.startswith('resnet'):
+            if self.config.backbone == 'resnet50':
+                self.net = ResNetSeg(input_shape=(self.config.H, self.config.W, 3), filters=self.config.filters, layers=50)
+            elif self.config.backbone == 'resnet101':
+                self.net = ResNetSeg(input_shape=(self.config.H, self.config.W, 3), filters=self.config.filters, layers=101)
         else:
             assert False, 'Architecture "' + self.config.backbone + '" not valid!'
 
-        self.net = backbone(filters=self.config.filters,
-                            dropout_rate=self.config.dropout_rate,
-                            batch_norm=self.config.batch_norm,
-                            upsample=self.config.net_upsample,
-                            merge=self.config.net_merge,
-                            name='net')
         if self.config.backbone == 'uNet2H':
             features1, features2 = self.net(self.normalized_img)
             features = [features1, features2]

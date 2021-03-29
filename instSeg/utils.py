@@ -3,6 +3,7 @@ import tensorflow.keras.backend as K
 import numpy as np
 import cv2
 from skimage.measure import regionprops
+from skimage.measure import label as relabel
 from tqdm import tqdm
 
 # def adj_matrix_tf(label):
@@ -50,6 +51,16 @@ def image_normalization_np(images):
     for img in images:
         normalized.append((img-img.mean())/(img.std()+1e-8))
     return np.array(normalized)
+
+def relabel_instance(instance, background=0):
+    '''
+    Args:
+        instance: label map of size B x H x W x 1 or B x H x W
+    '''
+    pbar = tqdm(instance, desc='Relabel instance map:', ncols=100)
+    for idx, _ in enumerate(pbar):
+        instance[idx,:,:,0] = relabel(instance[idx,:,:,0], background=background)
+    return instance
 
 def adj_matrix_np(labels, radius, max_obj=300):
     

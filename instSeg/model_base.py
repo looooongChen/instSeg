@@ -4,6 +4,7 @@ import tensorflow.keras.backend as K
 from instSeg.uNet import *
 from instSeg.utils import *
 import instSeg.loss as L
+from instSeg.enumDef import *
 from instSeg.post_process import *
 from instSeg.evaluation import Evaluator
 from skimage.measure import regionprops
@@ -19,19 +20,19 @@ except:
 
 class ModelBase(object):
 
-    def __init__(self, config, base_dir='./', run_name=''):
+    def __init__(self, config, model_dir='./'):
         self.config = config
+        config.model_type = MODEL_BASE
         # model saving
-        self.base_dir = os.path.join(base_dir, run_name)
-        if not os.path.exists(self.base_dir):
-            os.mkdir(self.base_dir)
-        self.weights_latest = os.path.join(self.base_dir, 'weights_latest')
-        self.weights_best = os.path.join(self.base_dir, 'weights_best')
-        self.train_summary_writer = tf.summary.create_file_writer(os.path.join(self.base_dir, 'train'))
-        self.val_summary_writer = tf.summary.create_file_writer(os.path.join(self.base_dir, 'val'))
+        self.model_dir = model_dir
+        if not os.path.exists(self.model_dir):
+            os.mkdir(self.model_dir)
+        self.weights_latest = os.path.join(self.model_dir, 'weights_latest')
+        self.weights_best = os.path.join(self.model_dir, 'weights_best')
+        self.train_summary_writer = tf.summary.create_file_writer(os.path.join(self.model_dir, 'train'))
+        self.val_summary_writer = tf.summary.create_file_writer(os.path.join(self.model_dir, 'val'))
         # training
         self.training_prepared = False
-        self.training_stage = 0
         self.training_epoch = 0
         self.training_step = 0
         # augmentation
@@ -81,7 +82,7 @@ class ModelBase(object):
         # distance regression loss
         if dist:
             loss_dist = {'binary_crossentropy': L.bce, 
-                         'mse': lambda y_true, y_pred: L.mse(y_true, y_pred),
+                         'mse': L.mse,
                          'huber': None,
                          'logcosh': None} 
             self.loss_fns['dist'] = loss_dist[self.config.loss_dist]
@@ -126,7 +127,8 @@ class ModelBase(object):
             if 'semantic' in data.keys():
                 data['semantic'] = data['semantic']
             else:
-                data['semantic'] = tf.cast(data['instance']>0, tf.uint16)
+                # data['semantic'] = tf.cast(data['instance']>0, tf.uint16)
+                data['semantic'] = (data['instance']>0).astype(np.uint8) 
 
         if dist:
             required.append('dist')
@@ -134,6 +136,7 @@ class ModelBase(object):
 
         if embedding:
             required.append('instance')
+            data['instance'] = relabel_instance(data['instance'])
             required.append('adj_matrix')
             data['adj_matrix'] = adj_matrix_np(data['instance'], self.config.neighbor_distance, self.config.max_obj)
 
@@ -193,7 +196,9 @@ class ModelBase(object):
         return ds
 
     def load_weights(self, load_best=False, weights_only=False):
+
         weights_path = self.weights_best if load_best else self.weights_latest
+        print(self.weights_best, self.weights_latest)
         cp_file = tf.train.latest_checkpoint(weights_path)
         
         if cp_file is not None:
@@ -201,63 +206,110 @@ class ModelBase(object):
             parsed = os.path.basename(cp_file).split('_')
             disp = 'Model restored from'
             for i in range(1, len(parsed)):
-                if parsed[i][:3] == 'sta':
-                    disp = disp + ' Stage {:d},'.format(int(parsed[i][5]))
-                    self.training_stage = int(parsed[i][5])-1 if not weights_only else self.training_stage 
+                # if parsed[i][:3] == 'sta':
+                #     disp = disp + ' Stage {:d},'.format(int(parsed[i][5]))
+                #     self.training_stage = int(parsed[i][5])-1 if not weights_only else self.training_stage 
                 if parsed[i][:3] == 'epo':
                     disp = disp + ' Epoch {:d}, '.format(int(parsed[i][5:]))
                     self.training_epoch = int(parsed[i][5:]) if not weights_only else self.training_epoch 
                 if parsed[i][:3] == 'ste':
                     disp = disp + 'Step {:d}'.format(int(parsed[i][4:]))
-                    self.training_step = int(parsed[i][4:]) if not weights_only else self.training_step 
-                if parsed[i][:3] == 'val':
-                    self.best_score = float(parsed[i][3:]) if not weights_only else self.best_score
+                    self.training_step = int(parsed[i][4:]) if not weights_only else self.training_step
+                if not weights_only: 
+                    self.best_score = self.best_score
+                    cp_best = tf.train.latest_checkpoint(self.weights_best) 
+                    if cp_best is not None:
+                        parsed_best = os.path.basename(cp_best).split('_')
+                        for i in range(1, len(parsed_best)):
+                            if parsed_best[i][:3] == 'val':
+                                self.best_score = float(parsed_best[i][3:])
+                # print('current best score: ', self.best_score)
             print(disp)
         else:
             print("Model not found!")
     
-    def save_weights(self, stage_wise=False, save_best=False):
+    # def save_weights(self, stage_wise=False, save_best=False):
+    def save_weights(self, save_best=False):
         
-        save_name = 'weights_stage' + str(self.training_stage+1) if stage_wise else 'weights'
-        save_name = save_name + '_epoch'+str(self.training_epoch)+'_step'+str(self.training_step)
+        # save_name = 'weights_stage' + str(self.training_stage+1) if stage_wise else 'weights'
+        save_name = 'weights' + '_epoch'+str(self.training_epoch)+'_step'+str(self.training_step)
         if save_best:
             save_name = save_name + '_val'+'{:.5f}'.format(float(self.best_score))
             if os.path.exists(self.weights_best):
                 for f in os.listdir(self.weights_best):
                     os.remove(os.path.join(self.weights_best, f))
             self.model.save_weights(os.path.join(self.weights_best, save_name))
-            print('Model saved at Stage {:d}, Step {:d}, Epoch {:d}'.format(self.training_stage+1, self.training_step, self.training_epoch))
+            # print('Model saved at Stage {:d}, Step {:d}, Epoch {:d}'.format(self.training_stage+1, self.training_step, self.training_epoch))
+            print('Model saved at Step {:d}, Epoch {:d}'.format(self.training_step, self.training_epoch))
         else:
             if os.path.exists(self.weights_latest):
                 for f in os.listdir(self.weights_latest):
                     os.remove(os.path.join(self.weights_latest, f))
             self.model.save_weights(os.path.join(self.weights_latest, save_name))
             print('Model saved at Step {:d}, Epoch {:d}'.format(self.training_step, self.training_epoch))
+        
+        self.config.save(os.path.join(self.model_dir, 'config.pkl'))
+
+    def predict_raw(self, image, keep_size=True):
+        
+        sz = image.shape
+        # model inference
+        img = np.squeeze(image)
+        img = image_resize_np([img], (self.config.H, self.config.W))
+        img = K.cast_to_floatx(img)
+        raw = self.model(img)
+        raw = {m: np.squeeze(o) for m, o in zip(self.config.modules, raw)}
+        # resize to original resolution
+        if keep_size:
+            for k in raw.keys():
+                if len(raw[k].shape) == 3:
+                    resized = np.zeros((sz[0], sz[1], raw[k].shape[-1]))
+                    for i in range(raw[k].shape[-1]):
+                        resized[:,:,i] = cv2.resize(raw[k][:,:,i], (sz[1], sz[0]), interpolation=cv2.INTER_LINEAR)
+                    raw[k] = resized
+                else: 
+                    raw[k] = cv2.resize(raw[k], (sz[1], sz[0]), interpolation=cv2.INTER_LINEAR)
+
+        return raw
     
 
 class InstSegMul(ModelBase):
 
     '''instance segmetation achieved by multi-tasking'''
 
-    def __init__(self, config, base_dir='./', run_name=''):
-        super().__init__(config, base_dir, run_name)
+    def __init__(self, config, model_dir='./'):
+        super().__init__(config, model_dir)
+        self.config.model_type = MODEL_INST
 
     @abstractmethod
     def build_model(self):
         ''' build the model self.self.model, the model output should be consistent with self.config.modules '''
         self.model = None
 
-    def postprocess(self, raw, thres_contour=0.5, thres_emb=0.7, thres_dist=0.5, min_size=20):
-        ''' return a tuple, the first item will be used by validate() for validation'''
+    def postprocess(self, raw):
+        ''' return a tuple, the first item will be used by validate() for validation
+        parametes could be set in config:
+            DCAN:
+                - dcan_thres_contour
+            Embedding + Dist:
+                - emb_thres
+                - emb_dist_thres
+                - emb_dist_intensity
+                - emb_max_step
+            All:
+                - min_size
+                - max_size
+        '''
 
         instances = None
         if len(raw) == 2:
             if 'semantic' in raw.keys() and 'contour' in raw.keys():
-                instances = instance_from_semantic_and_contour(raw, thres_contour=thres_contour)
+                instances = instance_from_semantic_and_contour(raw, self.config)
             if 'embedding' in raw.keys() and 'dist' in raw.keys():
-                instances = instance_from_emb_and_dist(raw, thres_emb=thres_emb, thres_dist=thres_dist)
+                instances = instance_from_emb_and_dist(raw, self.config)
             if 'semantic' in raw.keys() and 'dist' in raw.keys():
                 pass
+
         if len(self.config.modules) == 1:
             if 'semantic' in raw.keys():
                 instances = np.squeeze(np.argmax(raw['semantic'], axis=-1)).astype(np.uint8)
@@ -271,9 +323,9 @@ class InstSegMul(ModelBase):
             if 'dist' in raw.keys():
                 pass
             
-        if instances is not None and min_size > 0:
+        if instances is not None and (self.config.min_size > 0 or self.config.max_size < float('inf')):
             for r in regionprops(instances):
-                if r.area < min_size:
+                if r.area < self.config.min_size or r.area > self.config.max_size:
                     instances[r.coords[:,0], r.coords[:,1]] = 0
 
         return instances
@@ -297,7 +349,7 @@ class InstSegMul(ModelBase):
                         loss += l
                     losses.append(loss)
                 else:
-                    instances = self.postprocess(outs)
+                    instances = self.postprocess({m: o for m, o in zip(self.config.modules, outs)})
                     if isinstance(instances, tuple):
                         instances = instances[0]
                     if instances is not None:
@@ -444,7 +496,7 @@ class InstSegMul(ModelBase):
  
             self.training_epoch += 1
 
-            self.save_weights(stage_wise=False)
+            self.save_weights()
             if self.training_epoch >= self.config.validation_start_epoch:
                 self.validate(val_ds, save_best=True)
 

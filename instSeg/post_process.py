@@ -15,18 +15,20 @@ from skimage.filters import gaussian
 #     emb = emb /(1e-8 + np.linalg.norm(emb, ord=2, axis=-1, keepdims=True))
 #     return emb
 
-def instance_from_emb_and_dist(raw, thres_emb=0.7, thres_dist=0.5):
+def instance_from_emb_and_dist(raw, config):
     '''
-    Args:
-        raw_pred: a dict containing predictions of at least 'embedding', 'dist', optionally 'semantic'
-        thres_emb: threshold distinguishing object in the embedding space
-        top_radius: radius to get tophat
+    raw: a dict containing predictions of at least 'embedding', 'dist'
+    Parameters should be set in config:
+        emb_thres: threshold distinguishing object in the embedding space
+        emb_dist_thres: threshold to get seeds from distance regression map
+        emb_dist_intensity: if only instance is not evident, ignore
+        emb_max_step: max step for expanding the instance region
     '''
     embedding, dist = np.squeeze(raw['embedding']), np.squeeze(raw['dist'])
     # embedding = smooth_emb(embedding, 3)
     emebdding = embedding / (1e-8 + np.linalg.norm(embedding, ord=2, axis=-1, keepdims=True))
     dist = gaussian(dist, sigma=1)
-    regions = label(dist > thres_dist)
+    regions = label(dist > config.emb_dist_thres)
     props = regionprops(regions)
 
     mean = {}
@@ -36,24 +38,32 @@ def instance_from_emb_and_dist(raw, thres_emb=0.7, thres_dist=0.5):
         emb_mean = emb_mean/np.linalg.norm(emb_mean)
         mean[p.label] = emb_mean
 
+    step = 0
     while True:
         dilated = dilation(regions, square(3))
         front_r, front_c = np.nonzero((regions != dilated) * (regions == 0))
 
         similarity = [np.dot(embedding[r, c, :], mean[dilated[r, c]])
                       for r, c in zip(front_r, front_c)]
-        add_ind = np.array([s > thres_emb for s in similarity])
+        add_ind = np.array([s > config.emb_thres for s in similarity])
 
         if np.all(add_ind == False):
             break
         regions[front_r[add_ind], front_c[add_ind]] = dilated[front_r[add_ind], front_c[add_ind]]
+        step += 1
+        if step > config.emb_max_step:
+            break
+
+    for p in regionprops(regions, intensity_image=dist):
+        if p.mean_intensity < config.emb_dist_intensity:
+            regions[p.coords[:,0], p.coords[:,1]] = 0
 
     return regions
 
-def instance_from_semantic_and_contour(raw, thres_contour=0.5):
+def instance_from_semantic_and_contour(raw, config):
 
     semantic = np.squeeze(np.argmax(raw['semantic'], axis=-1)).astype(np.uint16)
-    contour = cv2.dilate((np.squeeze(raw['contour']) > thres_contour).astype(np.uint8), square(3), iterations = 1)
+    contour = cv2.dilate((np.squeeze(raw['contour']) > config.dcan_thres_contour).astype(np.uint8), square(3), iterations = 1)
 
     instances = label(semantic * (contour == 0)).astype(np.uint16)
     fg = (semantic > 0).astype(np.uint16)

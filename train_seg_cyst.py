@@ -14,9 +14,10 @@ config.loss_semantic = 'dice'
 # config.loss_contour = 'dice'
 config.backbone = 'uNet'
 config.filters = 32
-run_name = 'model_SEGdice_cyst'
+model_dir = './model_SEGdice_cyst'
 base_dir = './'
-splits = [0,1,2,3,4]
+# splits = [0,1,2,3,4]
+splits = [0]
 
 ds_csv = 'D:/instSeg/ds_cyst/cyst.csv'
 
@@ -47,9 +48,9 @@ ds_csv = 'D:/instSeg/ds_cyst/cyst.csv'
 
 # evalutation
 
-eval_dir = 'eval'+run_name[5:]
-if not os.path.exists(eval_dir):
-    os.makedirs(eval_dir)
+# eval_dir = 'eval'+run_name[5:]
+# if not os.path.exists(eval_dir):
+#     os.makedirs(eval_dir)
 
 
 with open(ds_csv) as csv_file:
@@ -63,7 +64,7 @@ with open(ds_csv) as csv_file:
 dice = []
 for s in splits:
     
-    model = instSeg.InstSegCascade(config=config, base_dir=base_dir, run_name=run_name+'_'+str(s))
+    model = instSeg.InstSegCascade(config=config, model_dir=model_dir+'_'+str(s))
     model.load_weights(load_best=True)
 
     for i, ss in enumerate(idx_spilt):
@@ -77,8 +78,10 @@ for s in splits:
         seg, raw = model.predict(img)
         # eval
         d = 2* np.sum((seg>0) * (gt>0))/(np.sum(seg>0)+np.sum(gt>0))
+        print(d)
         dice.append(d)
         # vis instance
-        vis = instSeg.vis.vis_semantic_area(img, seg, colors=['red'])
-        imsave(os.path.join(eval_dir, 'example_{:04d}_seg.png'.format(i)), vis)
+        # vis = instSeg.vis.vis_semantic_area(img, seg, colors=['red'])
+        # imsave(os.path.join(eval_dir, 'example_{:04d}_seg.png'.format(i)), vis)
+print(np.mean(dice))
 

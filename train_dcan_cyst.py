@@ -1,4 +1,3 @@
-
 import instSeg
 from skimage.io import imread, imsave
 import numpy as np
@@ -6,17 +5,26 @@ import os
 import csv
 import time
 import cv2
+from random import shuffle
 
 config = instSeg.ConfigParallel()
-config.loss_semantic = 'dice'
+config.loss_semantic = 'dice' 
 config.loss_contour = 'dice'
-config.backbone = 'uNetSA'
+config.contour_radius = 2
+config.train_learning_rate = 1e-5
+config.backbone = 'uNet'
 config.filters = 32
-run_name = 'model_DCANsa_cyst'
+run_name = 'model_DCAN_cyst'
 base_dir = './'
-splits = [0,1,2,3,4]
+splits = [0]
 
-ds_csv = 'D:/instSeg/ds_cyst/cyst.csv'
+config.train_batch_size = 3
+supepoches = 20
+image_load_split = 20
+subepoches = 5
+
+ds_dir = 'D:/Datasets/PheNeSensCyst/cysts_split'
+ds_csv = os.path.join(ds_dir, 'patches.csv')
 
 # training 
 for s in splits:
@@ -27,25 +35,47 @@ for s in splits:
         X_val, y_val = [], []
         for row in csv_reader:
             if int(row[0]) == s:
-                X_val.append(row[1])
-                y_val.append(row[2])
+                X_val.append(os.path.join(ds_dir, row[1]))
+                y_val.append(os.path.join(ds_dir, row[2]))
             else:
-                X_train.append(row[1])
-                y_train.append(row[2])
+                X_train.append(os.path.join(ds_dir, row[1]))
+                y_train.append(os.path.join(ds_dir, row[2]))
     
-    # X_train = X_train[:10]
-    # y_train = y_train[:10]
-    # X_val = X_val[:10]
-    # y_val = y_val[:10]
+    # X_train = X_train[:5000]
+    # y_train = y_train[:5000]
+    # X_val = X_val[:500]
+    # y_val = y_val[:500]
 
-    train_ds = {'image': np.array(list(map(imread,X_train))),
-                'instance': np.expand_dims(np.array(list(map(imread,y_train))), axis=-1)}
-    val_ds = {'image': np.array(list(map(imread,X_val))),
-              'instance': np.expand_dims(np.array(list(map(imread,y_val))), axis=-1)}
-    # create model and train
 
-    model = instSeg.InstSegParallel(config=config, base_dir=base_dir, run_name=run_name+'_'+str(s))
-    model.train(train_ds, val_ds, batch_size=4, epochs=300, augmentation=False)
+    epoch = 0
+    while epoch < supepoches * image_load_split * subepoches:
+
+        index_train = list(range(len(X_train)))
+        shuffle(index_train)
+        X_train = [X_train[i] for i in index_train]
+        y_train = [y_train[i] for i in index_train]
+        index_val = list(range(len(X_val)))
+        shuffle(index_val)
+        X_val = [X_val[i] for i in index_val]
+        y_val = [y_val[i] for i in index_val]
+
+        for ss in range(image_load_split):
+
+            X_train_ee = [example for idx, example in enumerate(X_train) if idx % image_load_split == ss]
+            y_train_ee = [example for idx, example in enumerate(y_train) if idx % image_load_split == ss]
+            X_val_ee = [example for idx, example in enumerate(X_val) if idx % image_load_split == ss]
+            y_val_ee = [example for idx, example in enumerate(y_val) if idx % image_load_split == ss]
+
+            train_ds = {'image': np.array(list(map(imread,X_train_ee))),
+                        'instance': np.expand_dims(np.array(list(map(imread,y_train_ee))), axis=-1)}
+            val_ds = {'image': np.array(list(map(imread,X_val_ee))),
+                      'instance': np.expand_dims(np.array(list(map(imread,y_val_ee))), axis=-1)}
+            print(train_ds['image'].shape, val_ds['image'].shape)
+            # create model and train
+
+            model = instSeg.InstSegParallel(config=config, base_dir=base_dir, run_name=run_name+'_'+str(s))
+            model.train(train_ds, val_ds, batch_size=4, epochs=epoch+subepoches, augmentation=False)
+            epoch = model.training_epoch
 
 
 # evalutation

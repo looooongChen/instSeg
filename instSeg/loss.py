@@ -108,43 +108,9 @@ def dice_union(y_true, y_pred):
     numerator = tf.reduce_sum(y_true * y_pred, axis=[1, 2])
     denominator = tf.reduce_sum(y_true + y_pred, axis=[1, 2])
 
-    dice_loss = 1 - 2 * numerator / (denominator + K.epsilon())
+    dice_loss = 1 - (2 * numerator + 1) / (denominator + 1)
     return tf.reduce_mean(dice_loss)
 
-# def object_dice(y_true, y_pred, beta=0.9):
-#     '''
-#     Args:
-#         y_true: label map of size B x H x W x 1
-#         y_pred: feature map of size B x H x W x 1, 'sigmoid' activated
-#             or B x H x W x 2, softmax activated
-#     '''
-
-#     y_true = y_true[:,:,:,-1]
-#     y_pred = y_pred[:,:,:,-1]
-
-#     losses = []
-#     for i in range(y_true.shape[0]):
-#         yy_true = tf.cast(y_true[i], tf.int32)
-#         yy_pred = y_pred[i]
-#         fg = tf.cast(yy_true > 0, yy_pred.dtype)
-#         numerator = tf.reduce_sum(fg * yy_pred)
-#         denominator = tf.reduce_sum(fg + yy_pred)
-#         loss = 1 - 2 * numerator / (denominator + K.epsilon())
-#         obj_loss = []
-#         labels, _ = tf.unique(tf.reshape(yy_true, [-1]))
-#         for l in labels:
-#             if l == 0:
-#                 continue
-#             obj = tf.cast(yy_true==l, yy_pred.dtype)
-#             occupy = tf.reduce_sum(obj*yy_pred)/(tf.reduce_sum(obj)+ K.epsilon())
-#             obj_loss.append(1-occupy)
-#         if len(obj_loss) != 0:
-#             loss = beta*loss + (1-beta)*tf.reduce_mean(obj_loss)
-#         else:
-#             loss = beta*loss
-#         losses.append(loss)
-
-#     return tf.reduce_mean(losses)
 
 def object_dice(y_true, y_pred, beta=0.9):
     '''
@@ -195,7 +161,7 @@ def gdice(y_true, y_pred):
     denominator = tf.reduce_sum(y_true_onehot + y_pred, axis=[1, 2])
     denominator = w * denominator
 
-    dice_loss = 1 - 2 * tf.reduce_sum(numerator, axis=1) / (tf.reduce_sum(denominator, axis=1) + K.epsilon())
+    dice_loss = 1 - (2 * tf.reduce_sum(numerator, axis=1) + 1)/ (tf.reduce_sum(denominator, axis=1) + 1)
     return tf.reduce_mean(dice_loss)
 
 def sensitivity_specificity_loss(y_true, y_pred, beta=1):
@@ -258,8 +224,8 @@ def mse(y_true, y_pred):
         y_true: label map of size B x H x W x 1
         y_pred: feature map of size B x H x W x 1
     '''
-    # y_true = tf.cast(y_true * 10.0, y_pred.dtype)
-    y_true = tf.cast(y_true, y_pred.dtype)
+    y_true = tf.cast(y_true * 10.0, y_pred.dtype)
+    # y_true = tf.cast(y_true, y_pred.dtype)
     mse = tf.square(y_pred - y_true)
     # weights = tf.cast(y_true>0, y_pred.dtype) + tf.cast(y_true==0, y_pred.dtype) * neg_weight
     # mse = tf.reduce_sum(mse*weights)/tf.reduce_sum(weights)
@@ -301,18 +267,6 @@ def cosine_embedding_loss(y_true, y_pred, adj_indicator, max_obj, include_backgr
         counts = tf.stop_gradient(counts)
         mu = tf.nn.l2_normalize(segmented_sum/counts, axis=1)
         # compute adjacent matrix is too slow, pre-computer before training starts
-        # label_stack = tf.one_hot(label, depth=label_depth, dtype=tf.int32)
-        # label_dilation = tf.nn.dilation2d(tf.expand_dims(label_stack, axis=0), 
-        #                                   disk_tf(neighbor_distance, label_depth), 
-        #                                   strides=[1 ,1, 1, 1], 
-        #                                   padding='SAME', data_format='NHWC', 
-        #                                   dilations=[1,1,1,1]) - 1
-        # neighbor = tf.transpose(label_dilation[0] * tf.expand_dims(label, axis=-1), perm=[2, 0, 1])
-        # def _indicator(x):
-        #     u, _ = tf.unique(tf.reshape(x, [-1]))
-        #     indicator = tf.reduce_max(tf.one_hot(u, depth=label_depth, dtype=tf.int32), axis=0)
-        #     return indicator
-        # v = tf.map_fn(_indicator, neighbor)
         inter_mask = (1 - tf.eye(max_obj, dtype=tf.int32)) * tf.cast(adj, tf.int32)
 
         ##########################
@@ -320,11 +274,8 @@ def cosine_embedding_loss(y_true, y_pred, adj_indicator, max_obj, include_backgr
         ##########################
         
         mu_expand = tf.gather(mu, unique_id)
-        # mu_inner = tf.stop_gradient(mu_expand)
-        # mu_inner = tf.identity(mu_expand)
         loss_inner = 1 - tf.reduce_sum(mu_expand * pred_flat, axis=-1)
         loss_inner = tf.reduce_mean(loss_inner)
-        # loss_inner = tf.where(tf.math.is_nan(loss_inner), 0.0, loss_inner)
 
         ##########################
         #### inter class loss ####
@@ -344,6 +295,73 @@ def cosine_embedding_loss(y_true, y_pred, adj_indicator, max_obj, include_backgr
 
     losses = tf.map_fn(_loss, (y_true, adj_indicator, y_pred))[2]
     return tf.reduce_mean(losses)
+
+# def l1_embedding_loss(y_true, y_pred, adj_indicator, max_obj, include_background=True):
+
+#     '''
+#     Args:
+#         adj_indicator: bool matrix, representing the adjacent relationship, B x InstNum x InstNum
+#         y_true: label map of size B x H x W x 1
+#         y_pred: pixel embedding of size B x H x W x C
+#     '''
+
+#     y_pred = tf.nn.softmax(y_pred, axis=-1, name='embedding_normalization')
+#     y_true = tf.squeeze(tf.cast(y_true, tf.int32), axis=-1)
+#     adj_indicator = tf.cast(adj_indicator, tf.int32)
+
+#     def _loss(x):
+#         label, adj, pred = x[0], x[1], x[2]
+#         # flatten the tensors
+#         label_flat = tf.reshape(label, [-1])
+#         pred_flat = tf.reshape(pred, [-1, tf.shape(pred)[-1]])
+
+#         # if not include background, mask out background pixels
+#         if not include_background:
+#             ind = tf.greater(label_flat, 0)
+#             label_flat = tf.boolean_mask(label_flat, ind)
+#             pred_flat = tf.boolean_mask(pred_flat, ind)
+
+#         # grouping labels
+#         unique_labels, unique_id, counts = tf.unique_with_counts(label_flat)
+#         counts = tf.reshape(K.cast_to_floatx(counts), (-1, 1))
+#         instance_num = tf.size(unique_labels, out_type=tf.int32)
+#         label_depth = instance_num if include_background else instance_num + 1
+#         # compute mean embedding of each instance
+#         segmented_sum = tf.math.unsorted_segment_sum(pred_flat, unique_id, instance_num)
+#         counts = tf.stop_gradient(counts)
+#         # mu = tf.nn.l2_normalize(segmented_sum/counts, axis=1)
+#         mu = tf.nn.softmax(segmented_sum/counts, axis=-1)
+#         # compute adjacent matrix is too slow, pre-computer before training starts
+#         inter_mask = (1 - tf.eye(max_obj, dtype=tf.int32)) * tf.cast(adj, tf.int32)
+
+#         ##########################
+#         #### inner class loss ####
+#         ##########################
+        
+#         mu_expand = tf.gather(mu, unique_id)
+#         # loss_inner = 1 - tf.reduce_sum(mu_expand * pred_flat, axis=-1)
+#         loss_inner = tf.norm(mu_expand - pred_flat, ord=1, axis=-1)
+#         loss_inner = tf.reduce_mean(loss_inner)
+
+#         ##########################
+#         #### inter class loss ####
+#         ##########################
+
+#         # get inter loss for each pair
+#         mu_interleave = tf.tile(mu, [instance_num, 1])
+#         mu_rep = tf.reshape(tf.tile(mu, [1, instance_num]), (instance_num*instance_num, -1))
+#         # loss_inter = tf.abs(tf.reduce_sum(mu_interleave * mu_rep, axis=-1))
+#         loss_inter = 1 - tf.norm(mu_interleave - mu_rep, ord=1, axis=-1)
+#         # apply inter loss mask
+#         inter_mask = tf.gather(inter_mask, unique_labels, axis=0)
+#         inter_mask = tf.gather(inter_mask, unique_labels, axis=1)
+#         inter_mask = K.cast_to_floatx(tf.reshape(inter_mask, [-1]))
+#         loss_inter = tf.reduce_sum(loss_inter*inter_mask)/(tf.reduce_sum(inter_mask)+K.epsilon())
+
+#         return 0, 0, loss_inner + loss_inter
+
+#     losses = tf.map_fn(_loss, (y_true, adj_indicator, y_pred))[2]
+#     return tf.reduce_mean(losses)
 
 # def argmax_embedding_loss(y_true, y_pred, adj_indicator, max_obj, include_background=True):
 

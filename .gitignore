@@ -4,3 +4,5 @@ eval_*/
 log_*/
 __pycache__/
 instSegV2/__pycache__/
+train_*
+test_*
