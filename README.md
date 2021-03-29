@@ -24,7 +24,7 @@ instSegDCAN: DCAN: Deep Contour-Aware Networks for Accurate Gland Segmentation
 ## train the model
 
 ```python
-import instSegV2
+import instSeg
 
 # three modules can be activated independtly
 config = instSegV2.Config(semantic_module=True, dist_module=True, embedding_module=True)
