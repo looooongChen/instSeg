@@ -1,34 +1,27 @@
 import numpy as np
 import cv2
-from skimage.morphology import disk, square, dilation
+from skimage.morphology import disk, square, dilation, closing, opening
 from skimage.measure import regionprops, label
-# from skimage.feature import peak_local_max
-# from scipy import ndimage
-# from skimage.morphology import disk, erosion
 from skimage.filters import gaussian
+from scipy.ndimage import gaussian_filter
+from skimage.segmentation import watershed
+from instSeg.flow import *
 
-# def smooth_emb(emb, radius):
-#     emb = emb.copy()
-#     w = disk(radius)/np.sum(disk(radius))
-#     for i in range(emb.shape[-1]):
-#         emb[:, :, i] = ndimage.convolve(emb[:, :, i], w, mode='reflect')
-#     emb = emb /(1e-8 + np.linalg.norm(emb, ord=2, axis=-1, keepdims=True))
-#     return emb
 
 def instance_from_emb_and_dist(raw, config):
     '''
-    raw: a dict containing predictions of at least 'embedding', 'dist'
+    raw: a dict containing predictions of at least 'embedding', 'edt'
     Parameters should be set in config:
         emb_thres: threshold distinguishing object in the embedding space
-        emb_dist_thres: threshold to get seeds from distance regression map
-        emb_dist_intensity: if only instance is not evident, ignore
+        dist_thres: threshold to get seeds from distance regression map
+        dist_intensity: if only instance is not evident, ignore
         emb_max_step: max step for expanding the instance region
     '''
-    embedding, dist = np.squeeze(raw['embedding']), np.squeeze(raw['dist'])
+    embedding, dist = np.squeeze(raw['embedding']), np.squeeze(raw['edt'])
     # embedding = smooth_emb(embedding, 3)
     emebdding = embedding / (1e-8 + np.linalg.norm(embedding, ord=2, axis=-1, keepdims=True))
     dist = gaussian(dist, sigma=1)
-    regions = label(dist > config.emb_dist_thres)
+    regions = label(dist > config.dist_thres)
     props = regionprops(regions)
 
     mean = {}
@@ -55,7 +48,7 @@ def instance_from_emb_and_dist(raw, config):
             break
 
     for p in regionprops(regions, intensity_image=dist):
-        if p.mean_intensity < config.emb_dist_intensity:
+        if p.mean_intensity < config.dist_intensity:
             regions[p.coords[:,0], p.coords[:,1]] = 0
 
     return regions
@@ -76,7 +69,66 @@ def instance_from_semantic_and_contour(raw, config):
     
     return instances
 
+def instance_from_edt(raw, config):
+    '''
+    Parameters should be set in config:
+        dist_mode: 'thresholding', 'tracking'
+        edt_instance_thres: thres to get instance seeds, if dist_mode == 'thresholding'
+        edt_fg_thres: thres to get forground, if dist_mode == 'thresholding'
+    '''
+    dist = np.squeeze(raw['edt'])
+    dist = gaussian(dist, sigma=1)
+    fg = dist > config.edt_fg_thres
+    
+    if config.edt_mode == 'thresholding':
+        instances = label(dist > config.edt_instance_thres)
+        instances = watershed(-dist, instances) * fg
+    elif config.edt_mode == 'tracking':
+        flow = get_flow(dist, sigma=3, normalize=True)
+        instances = seg_from_flow(flow, config.tracking_iters, mask=fg)
+    
+    return instances
 
+def instance_from_edt_and_semantic(raw, config):
+
+    '''
+    Parameters should be set in config:
+        dist_mode: 'thresholding', 'tracking'
+        edt_instance_thres: thres to get instance seeds, if dist_mode == 'thresholding'
+        semantic_bg: lalel of background label
+    '''
+    semantic = np.squeeze(np.argmax(raw['semantic'], axis=-1)).astype(np.uint16)
+    dist = np.squeeze(raw['edt'])
+    dist = gaussian(dist, sigma=1)
+    fg =  closing(semantic != config.semantic_bg, square(1))
+    
+    if config.edt_mode == 'thresholding':
+        instances = label(dist > config.edt_instance_thres)
+        instances = watershed(-dist, instances) * fg
+    elif config.edt_mode == 'tracking':
+        flow = get_flow(dist, sigma=3, normalize=True)
+        instances = seg_from_flow(flow, config.tracking_iters, mask=fg)
+    
+    return instances
+
+def instance_from_flow(flow, mask, config):
+
+    '''
+    Args:
+        flow: H x W
+        mask: H x W
+    Parameters should be set in config:
+    '''
+    instances = seg_from_flow(flow, config.tracking_iters, mask=mask)
+    
+    return instances
+
+
+
+
+
+
+    
 # from mws import MutexPixelEmbedding
 # def mutex(pred):
 
@@ -89,6 +141,3 @@ def instance_from_semantic_and_contour(raw, config):
 #     seg = m.run(embedding, semantic>0)
 
 #     return label(seg)
-
-    
-

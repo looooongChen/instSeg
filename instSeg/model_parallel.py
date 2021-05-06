@@ -37,7 +37,9 @@ class InstSegParallel(InstSegMul):
                 backbone = UNetD
             elif self.config.backbone == 'uNet': 
                 backbone = UNet
-            self.net = backbone(filters=self.config.filters,
+            self.net = backbone(D=self.config.D,
+                                filters=self.config.filters,
+                                residual=self.config.residual,
                                 dropout_rate=self.config.dropout_rate,
                                 batch_norm=self.config.batch_norm,
                                 upsample=self.config.net_upsample,
@@ -65,26 +67,28 @@ class InstSegParallel(InstSegMul):
                                                kernel_size=3, padding='same', activation='softmax', 
                                                kernel_initializer='he_normal',
                                                name='out_semantic')
-                output_list.append(outlayer(features[idx]))
             if m == 'contour':
                 outlayer = keras.layers.Conv2D(filters=1, 
                                                kernel_size=3, padding='same', activation='sigmoid', 
                                                kernel_initializer='he_normal', 
                                                name='out_contour')
-                output_list.append(outlayer(features[idx]))
-            if m == 'dist':
-                activation = 'sigmoid' if self.config.loss_dist == 'binary_crossentropy' else 'linear'
+            if m == 'edt':
+                activation = 'sigmoid' if self.config.edt_loss == 'binary_crossentropy' else 'linear'
                 outlayer = keras.layers.Conv2D(filters=1, 
                                                kernel_size=3, padding='same', activation=activation, 
                                                kernel_initializer='he_normal',
-                                               name='out_dist')
-                output_list.append(outlayer(features[idx]))
+                                               name='out_edt')
+            if m == 'edt_flow':
+                outlayer = keras.layers.Conv2D(filters=2, 
+                                               kernel_size=3, padding='same', activation='linear', 
+                                               kernel_initializer='he_normal',
+                                               name='out_edt_flow')
             if m == 'embedding':
                 outlayer = keras.layers.Conv2D(filters=self.config.embedding_dim, 
                                                kernel_size=3, padding='same', activation='linear', 
                                                kernel_initializer='he_normal', 
                                                name='out_embedding')
-                output_list.append(outlayer(features[idx]))     
+            output_list.append(outlayer(features[idx]))     
                     
         self.model = keras.Model(inputs=self.input_img, outputs=output_list)
         

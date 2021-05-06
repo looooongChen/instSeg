@@ -14,9 +14,9 @@ from abc import abstractmethod
 
 try:
     import tfAugmentor as tfaug 
-    augemntor_available = True
+    augmntor_available = True
 except:
-    augemntor_available = False
+    augmntor_available = False
 
 class ModelBase(object):
 
@@ -36,7 +36,7 @@ class ModelBase(object):
         self.training_epoch = 0
         self.training_step = 0
         # augmentation
-        self.augemntor_available = augemntor_available
+        self.augmntor_available = augmntor_available
         # validation
         self.best_score = None
         # build model
@@ -51,11 +51,7 @@ class ModelBase(object):
         p = self.training_step // self.config.lr_decay_period
         return self.config.train_learning_rate * (self.config.lr_decay_rate ** p)
     
-    def prepare_training(self,
-                         semantic=False,
-                         dist=False,
-                         embedding=False, 
-                         contour=False):
+    def prepare_training(self):
 
         ''' prepare loss functions and optimizer'''
 
@@ -66,47 +62,41 @@ class ModelBase(object):
 
         self.loss_fns = {}
         # semantic loss
-        if semantic:
-            loss_semantic = {'crossentropy': L.ce, 
-                             'binary_crossentropy': L.bce,
-                             'weighted_binary_crossentropy': L.wbce,
-                             'balanced_binary_corssentropy': L.bbce,
-                             'dice': L.dice_union,
-                             'object_dice': L.object_dice,
-                             'dice_union': L.dice_union,
-                             'dice_square': L.dice_square,
-                             'generalised_dice': L.gdice,
-                             'focal_loss': lambda y_true, y_pred: L.focal_loss(y_true, y_pred, gamma=self.config.focal_loss_gamma),
-                             'sensitivity_specificity': lambda y_true, y_pred: L.sensitivity_specificity_loss(y_true, y_pred, beta=self.config.sensitivity_specificity_loss_beta)}
-            self.loss_fns['semantic'] = loss_semantic[self.config.loss_semantic] 
+        loss_semantic = {'crossentropy': L.ce, 
+                         'binary_crossentropy': L.bce,
+                         'weighted_binary_crossentropy': L.wbce,
+                         'balanced_binary_corssentropy': L.bbce,
+                         'dice': L.dice_union,
+                         'object_dice': L.object_dice,
+                         'dice_union': L.dice_union,
+                         'dice_square': L.dice_square,
+                         'generalised_dice': L.gdice,
+                         'focal_loss': lambda y_true, y_pred: L.focal_loss(y_true, y_pred, gamma=self.config.focal_loss_gamma),
+                         'sensitivity_specificity': lambda y_true, y_pred: L.sensitivity_specificity_loss(y_true, y_pred, beta=self.config.sensitivity_specificity_loss_beta)}
+        self.loss_fns['semantic'] = loss_semantic[self.config.semantic_loss] 
         # distance regression loss
-        if dist:
-            loss_dist = {'binary_crossentropy': L.bce, 
-                         'mse': L.mse,
-                         'huber': None,
-                         'logcosh': None} 
-            self.loss_fns['dist'] = loss_dist[self.config.loss_dist]
+        loss_reg = {'binary_crossentropy': L.bce, 
+                    'mse': L.mse,
+                    'masked_mse': L.masked_mse,
+                    'huber': None,
+                    'logcosh': None} 
+        self.loss_fns['edt'] = loss_reg[self.config.edt_loss]
+        # flow regression
+        self.loss_fns['edt_flow'] = loss_reg[self.config.edt_flow_loss]
         # embedding loss
-        if embedding:
-            loss_embedding = {'cos': lambda y_true, y_pred, adj_indicator: L.cosine_embedding_loss(y_true, y_pred, adj_indicator, self.config.max_obj, include_background=self.config.embedding_include_bg)}
-            self.loss_fns['embedding'] = loss_embedding[self.config.loss_embedding]
+        loss_embedding = {'cos': lambda y_true, y_pred, adj_indicator: L.cosine_embedding_loss(y_true, y_pred, adj_indicator, self.config.max_obj, include_background=self.config.embedding_include_bg)}
+        self.loss_fns['embedding'] = loss_embedding[self.config.embedding_loss]
         # contour loss
-        if contour:
-            loss_contour = {'binary_crossentropy': L.bce,
-                            'weighted_binary_crossentropy': L.wbce,
-                            'balanced_binary_corssentropy': L.bbce,
-                            'dice': L.dice_union,
-                            'focal_loss': lambda y_true, y_pred: L.binary_focal_loss(y_true, y_pred, gamma=2.0)}
-            self.loss_fns['contour'] = loss_contour[self.config.loss_contour]
+        loss_contour = {'binary_crossentropy': L.bce,
+                        'weighted_binary_crossentropy': L.wbce,
+                        'balanced_binary_corssentropy': L.bbce,
+                        'dice': L.dice_union,
+                        'focal_loss': lambda y_true, y_pred: L.binary_focal_loss(y_true, y_pred, gamma=2.0)}
+        self.loss_fns['contour'] = loss_contour[self.config.contour_loss]
 
         self.training_prepared = True
     
-    def ds_from_np(self, data,
-                   instance=False, 
-                   semantic=False,
-                   dist=False,
-                   embedding=False, 
-                   contour=False):
+    def data_loader(self, data, modules, keep_instance=False):
 
         '''prepare training dataset'''
 
@@ -117,80 +107,122 @@ class ModelBase(object):
             else:
                 data[k] = image_resize_np(data[k], (self.config.H, self.config.W), method='nearest')
 
-        required = ['image']
+        data_to_keep = ['image']
 
-        if instance:
-            required.append('instance')
+        for m in modules:
 
-        if semantic:
-            required.append('semantic')
-            if 'semantic' in data.keys():
-                data['semantic'] = data['semantic']
-            else:
-                # data['semantic'] = tf.cast(data['instance']>0, tf.uint16)
-                data['semantic'] = (data['instance']>0).astype(np.uint8) 
+            if m == 'semantic':
+                if 'semantic' in data.keys():
+                    data_to_keep.append('semantic')
+                elif self.config.semantic_in_ram:
+                    data_to_keep.append('semantic')
+                    data['semantic'] = (data['instance']>0).astype(np.uint8) 
+                else:
+                    keep_instance = True
 
-        if dist:
-            required.append('dist')
-            data['dist']  = edt_np(data['instance'], normalize=True)
+            # keep edt in ram may cause error, if augmentation used
+            if m == 'edt': 
+                if self.config.edt_in_ram:
+                    data_to_keep.append('edt')
+                    data['edt'] = edt(data['instance'], normalize=self.config.edt_normalize, process_disp=True)
+                    if self.config.edt_normalize:
+                        data['edt'] = data['edt'] * 10
+                    if self.config.edt_loss.startswith('masked'):
+                        keep_instance = True
+                else:
+                    keep_instance = True
 
-        if embedding:
-            required.append('instance')
-            data['instance'] = relabel_instance(data['instance'])
-            required.append('adj_matrix')
-            data['adj_matrix'] = adj_matrix_np(data['instance'], self.config.neighbor_distance, self.config.max_obj)
+            # keep edt in ram may cuase error, if augmentation used
+            if m == 'edt_flow':
+                if self.config.edt_flow_in_ram:
+                    data_to_keep.append('edt_flow')
+                    data['edt_flow'] = 10 * edt_flow(data['instance'], normalize=self.config.edt_normalize, bg=False, process_disp=True)
+                    if self.config.edt_flow_loss.startswith('masked'):
+                        keep_instance = True
+                else:
+                    keep_instance = True
+                
+            if m == 'embedding':
+                required.append('adj_matrix')
+                data['adj_matrix'] = adj_matrix(data['instance'], self.config.neighbor_distance, self.config.max_obj)
 
-        if contour:
-            required.append('contour')
-            data['contour'] = contour_np(data['instance'], radius=self.config.contour_radius)
+            if m == 'contour':
+                if self.config.contour_in_ram:
+                    data_to_keep.append('contour')
+                    data['contour'] = contour(data['instance'], radius=self.config.contour_radius)
+                else:
+                    keep_instance = True
+        
+        if keep_instance:
+            data_to_keep.append('instance')
+            data['instance'] = relabel_instance(data['instance']).astype(np.int32)
 
         for k in list(data.keys()):
-            if k not in required:
+            if k not in data_to_keep:
                 del data[k]
 
         # return data
         return tf.data.Dataset.from_tensor_slices(data)
+
+    def get_training_batch(self, ds_item):
+        for m in self.config.modules:
+            if m not in ds_item.keys():
+                if m == 'semantic':
+                    ds_item['semantic'] = tf.cast(ds_item['instance']>0, tf.int8)
+                if m == 'contour':
+                    ds_item['contour'] = contour(ds_item['instance'], radius=self.config.contour_radius, process_disp=False)
+                if m == 'edt':
+                    ds_item['edt'] = edt(ds_item['instance'], normalize=self.config.edt_normalize, process_disp=False)
+                    if self.config.edt_normalize:
+                        ds_item['edt'] = 10 * ds_item['edt']
+                if m == 'edt_flow':
+                    ds_item['edt_flow'] =  10 * edt_flow(ds_item['instance'], normalize=self.config.edt_flow_normalize, bg=False, process_disp=False)
+        return ds_item
     
     def ds_augment(self, ds):
 
         '''augmentation if necessary'''
 
-        if augemntor_available:
+        if augmntor_available:
             image_list = ['image']
             label_list = []
-            if self.config.dist:
-                image_list.append('dist')
-            if self.config.semantic:
-                label_list.append('semantic')
-            if self.config.embedding:
-                label_list.append('instance')
+            for m in ds.element_spec.keys()  :
+                if m == 'instance':
+                    label_list.append('instance')
+                if m == 'semantic':
+                    label_list.append('semantic')
+                if m == 'edt':
+                    print('WARNING: augment euclidean distance transform may be problematic!')
+                    image_list.append('edt')
+                if m == 'edt_flow':
+                    assert False, 'Directly augmenting flow is not supported, set config.edt_flow_in_ram to False'
+                if m == 'contour':
+                    label_list.append('contour')
+
+            keys = image_list + label_list
             aug_ds = []
             if self.config.flip:
-                aug_flip_lr = tfaug.Augmentor(image=image_list, label=label_list)
-                aug_flip_lr.flip_left_right(probability=1)
-                aug_ds.append(aug_flip_lr(ds))
-                aug_flip_ud = tfaug.Augmentor(image=image_list, label=label_list)
-                aug_flip_ud.flip_up_down(probability=1)
-                aug_ds.append(aug_flip_ud(ds))
-            if self.config.elastic_strength != 0 and self.config.elastic_scale != 0:
-                print('elastic')
-                aug_elas = tfaug.Augmentor(image=image_list, label=label_list)
+                aug_flip = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                aug_flip.flip_left_right(probability=0.8)
+                aug_flip.flip_up_down(probability=0.8)
+                aug_ds.append(aug_flip(ds))
+            if self.config.elastic_deform:
+                aug_elas = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
                 aug_elas.elastic_deform(strength=self.config.elastic_strength, scale=self.config.elastic_scale, probability=1)
                 aug_ds.append(aug_elas(ds))
-            if self.config.rotation:
-                aug_rotate90 = tfaug.Augmentor(image=image_list, label=label_list)
-                aug_rotate90.rotate90(probability=1)
-                aug_ds.append(aug_rotate90(ds))
-                aug_rotate180 = tfaug.Augmentor(image=image_list, label=label_list)
-                aug_rotate180.rotate180(probability=1)
-                aug_ds.append(aug_rotate180(ds))
-                aug_rotate270 = tfaug.Augmentor(image=image_list, label=label_list)
-                aug_rotate270.rotate270(probability=1)
-                aug_ds.append(aug_rotate270(ds))
+            if self.config.random_rotation:
+                aug_rotation = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                aug_rotation.random_rotate(probability=1)
+                aug_ds.append(aug_rotation(ds))
             if self.config.random_crop:
-                aug_crop = tfaug.Augmentor(image=image_list, label=label_list)
+                aug_crop = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
                 aug_crop.random_crop(scale_range=self.config.random_crop_range, probability=1)
                 aug_ds.append(aug_crop(ds))
+            if self.config.random_gamma:
+                aug_gamma = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                aug_gamma.random_gamma(gamma_range=self.config.random_gamma_range, probability=1)
+                aug_ds.append(aug_gamma(ds))
+
             for d in aug_ds:
                 ds = ds.concatenate(d)
         return ds
@@ -198,7 +230,6 @@ class ModelBase(object):
     def load_weights(self, load_best=False, weights_only=False):
 
         weights_path = self.weights_best if load_best else self.weights_latest
-        print(self.weights_best, self.weights_latest)
         cp_file = tf.train.latest_checkpoint(weights_path)
         
         if cp_file is not None:
@@ -206,9 +237,6 @@ class ModelBase(object):
             parsed = os.path.basename(cp_file).split('_')
             disp = 'Model restored from'
             for i in range(1, len(parsed)):
-                # if parsed[i][:3] == 'sta':
-                #     disp = disp + ' Stage {:d},'.format(int(parsed[i][5]))
-                #     self.training_stage = int(parsed[i][5])-1 if not weights_only else self.training_stage 
                 if parsed[i][:3] == 'epo':
                     disp = disp + ' Epoch {:d}, '.format(int(parsed[i][5:]))
                     self.training_epoch = int(parsed[i][5:]) if not weights_only else self.training_epoch 
@@ -291,11 +319,13 @@ class InstSegMul(ModelBase):
         parametes could be set in config:
             DCAN:
                 - dcan_thres_contour
-            Embedding + Dist:
+            Embedding + edt:
                 - emb_thres
-                - emb_dist_thres
-                - emb_dist_intensity
                 - emb_max_step
+                - edt_thres_upper
+                - edt_intensity
+            EDT:
+                - di
             All:
                 - min_size
                 - max_size
@@ -305,10 +335,14 @@ class InstSegMul(ModelBase):
         if len(raw) == 2:
             if 'semantic' in raw.keys() and 'contour' in raw.keys():
                 instances = instance_from_semantic_and_contour(raw, self.config)
-            if 'embedding' in raw.keys() and 'dist' in raw.keys():
-                instances = instance_from_emb_and_dist(raw, self.config)
-            if 'semantic' in raw.keys() and 'dist' in raw.keys():
-                pass
+            if 'embedding' in raw.keys() and 'edt' in raw.keys():
+                instances = instance_from_emb_and_edt(raw, self.config)
+            if 'semantic' in raw.keys() and 'edt' in raw.keys():
+                instances = instance_from_edt_and_semantic(raw, self.config)
+            if 'edt_flow' in raw.keys() and 'semantic' in raw.keys():
+                mask = np.squeeze(np.argmax(raw['semantic'], axis=-1)).astype(np.uint16)
+                flow = np.squeeze(raw['edt_flow'])/10
+                instances = instance_from_flow(flow, mask, self.config)
 
         if len(self.config.modules) == 1:
             if 'semantic' in raw.keys():
@@ -320,10 +354,10 @@ class InstSegMul(ModelBase):
                     pass
                 if self.embedding_cluster == 'mws':
                     pass
-            if 'dist' in raw.keys():
-                pass
+            if 'edt' in raw.keys():
+                instances = instance_from_edt(raw, self.config)
             
-        if instances is not None and (self.config.min_size > 0 or self.config.max_size < float('inf')):
+        if self.config.min_size > 0 or self.config.max_size < float('inf'):
             for r in regionprops(instances):
                 if r.area < self.config.min_size or r.area > self.config.max_size:
                     instances[r.coords[:,0], r.coords[:,1]] = 0
@@ -344,7 +378,7 @@ class InstSegMul(ModelBase):
                     loss = 0
                     outs = [outs] if len(self.config.modules) == 1 else outs
                     for m, out in zip(self.config.modules, outs):
-                        l = self._modules_loss(m, out, ds_item)
+                        l = self._module_loss(m, out, ds_item)
                         print('validation example with loss: {:5f}'.format(l))
                         loss += l
                     losses.append(loss)
@@ -388,16 +422,23 @@ class InstSegMul(ModelBase):
             else:
                 print("Validation Score Not Improved: " + disp)
 
-    def _modules_loss(self, module, out, ds_item):
+    def _module_loss(self, module, out, ds_item):
         if module == 'semantic':
-            gt = ds_item['instance'] if self.config.loss_semantic == 'object_dice' else ds_item['semantic']
-            return self.loss_fns['semantic'](gt, out) * self.config.weight_semantic
+            return self.loss_fns['semantic'](ds_item['semantic'], out) * self.config.semantic_weight
         elif module == 'contour':
-            return self.loss_fns['contour'](ds_item['contour'], out) * self.config.weight_contour
-        elif module == 'dist':
-            return self.loss_fns['dist'](ds_item['dist'], out) * self.config.weight_dist
+            return self.loss_fns['contour'](ds_item['contour'], out) * self.config.contour_weight
+        elif module == 'edt':
+            if self.config.edt_loss.startswith('masked'):
+                return self.loss_fns['edt'](ds_item['edt'], out, ds_item['instance']) * self.config.edt_weight
+            else:
+                return self.loss_fns['edt'](ds_item['edt'], out) * self.config.edt_weight
+        elif module == 'edt_flow':
+            if self.config.edt_flow_loss.startswith('masked'):
+                return self.loss_fns['edt_flow'](ds_item['edt_flow'], out, ds_item['instance']) * self.config.edt_flow_weight
+            else:
+                return self.loss_fns['edt_flow'](ds_item['edt_flow'], out) * self.config.edt_flow_weight
         elif module == 'embedding':
-            return self.loss_fns['embedding'](ds_item['instance'], out, ds_item['adj_matrix']) * self.config.weight_embedding
+            return self.loss_fns['embedding'](ds_item['instance'], out, ds_item['adj_matrix']) * self.config.embedding_weight
 
 
     def train(self, train_data, validation_data=None, epochs=None, batch_size=None,
@@ -409,29 +450,25 @@ class InstSegMul(ModelBase):
                 instance (reuqired): numpy array of size N x H x W x 1, 0 indicated background
                 semantic: numpy array of size N x H x W x 1
         '''
-        modules_dict = {m: True for m in self.config.modules}
         # prepare network
         if not self.training_prepared:
-            self.prepare_training(**modules_dict)
+            self.prepare_training()
         epochs = self.config.train_epochs if epochs is None else epochs
         batch_size = self.config.train_batch_size if batch_size is None else batch_size
 
         # prepare data
-        if 'semantic' in self.config.modules and self.config.loss_semantic == 'object_dice':
-            modules_dict['semantic'] = False
-            modules_dict['instance'] = True
-        train_ds = self.ds_from_np(train_data, **modules_dict)
+        train_ds = self.data_loader(train_data, self.config.modules)
         if augmentation:
             train_ds = self.ds_augment(train_ds)
-        train_ds = train_ds.shuffle(buffer_size=512).batch(batch_size)
+        train_ds = train_ds.shuffle(buffer_size=1024).batch(batch_size)
         if validation_data is None or len(validation_data['image']) == 0:
             val_ds = None
         else:
             modules_dict['instance'] = True
             if self.config.save_best_metric == 'loss':
-                val_ds = self.ds_from_np(validation_data, **modules_dict).batch(1)
+                val_ds = self.data_loader(validation_data, self.config.modules).batch(1)
             else:
-                val_ds = self.ds_from_np(validation_data, instance=True).batch(1)
+                val_ds = self.data_loader(validation_data, ['image'], keep_instance=True).batch(1)
             
         # load model
         self.load_weights()
@@ -439,6 +476,7 @@ class InstSegMul(ModelBase):
         # train
         for _ in range(epochs-self.training_epoch):
             for ds_item in train_ds:
+                ds_item = self.get_training_batch(ds_item)
                 with tf.GradientTape() as tape:
                     outs = self.model(ds_item['image'])
                     if len(self.config.modules) == 1:
@@ -446,7 +484,7 @@ class InstSegMul(ModelBase):
 
                     losses, loss = {}, 0
                     for m, out in zip(self.config.modules, outs):
-                        losses[m] = self._modules_loss(m, out, ds_item)
+                        losses[m] = self._module_loss(m, out, ds_item)
                         loss += losses[m]
                     
                     grads = tape.gradient(loss, self.model.trainable_weights)
@@ -471,7 +509,7 @@ class InstSegMul(ModelBase):
                             if 'semantic' in outs_dict.keys():
                                 vis_semantic = tf.expand_dims(tf.argmax(outs_dict['semantic'], axis=-1), axis=-1)
                                 tf.summary.image('semantic', vis_semantic*255/tf.reduce_max(vis_semantic), step=self.training_step, max_outputs=1)
-                                gt = ds_item['instance'] if self.config.loss_semantic == 'object_dice' else ds_item['semantic']
+                                gt = tf.cast(ds_item['semantic'], tf.int32)
                                 tf.summary.image('semantic_gt', tf.cast(gt*255/tf.reduce_max(gt), tf.uint8), step=self.training_step, max_outputs=1)
                             # contour
                             if 'contour' in outs_dict.keys():
@@ -479,12 +517,12 @@ class InstSegMul(ModelBase):
                                 tf.summary.image('contour', vis_contour, step=self.training_step, max_outputs=1)
                                 vis_contour_gt = tf.cast(ds_item['contour'], tf.uint8) * 255
                                 tf.summary.image('contour_gt', vis_contour_gt, step=self.training_step, max_outputs=1)
-                            # dist regression
-                            if 'dist' in outs_dict.keys():
-                                vis_dist = tf.cast(outs_dict['dist']*255/tf.reduce_max(outs_dict['dist']), tf.uint8)
-                                tf.summary.image('dist', vis_dist, step=self.training_step, max_outputs=1)
-                                vis_dist_gt = tf.cast(ds_item['dist']*255/tf.reduce_max(ds_item['dist']), tf.uint8)
-                                tf.summary.image('dist_gt', vis_dist_gt, step=self.training_step, max_outputs=1)
+                            # edt regression
+                            if 'edt' in outs_dict.keys():
+                                vis_edt = tf.cast(outs_dict['edt']*255/tf.reduce_max(outs_dict['edt']), tf.uint8)
+                                tf.summary.image('edt', vis_edt, step=self.training_step, max_outputs=1)
+                                vis_edt_gt = tf.cast(ds_item['edt']*255/tf.reduce_max(ds_item['edt']), tf.uint8)
+                                tf.summary.image('edt_gt', vis_edt_gt, step=self.training_step, max_outputs=1)
                             # embedding
                             if 'embedding' in outs_dict.keys():
                                 for i in range(self.config.embedding_dim//3):

@@ -224,9 +224,27 @@ def mse(y_true, y_pred):
         y_true: label map of size B x H x W x 1
         y_pred: feature map of size B x H x W x 1
     '''
-    y_true = tf.cast(y_true * 10.0, y_pred.dtype)
+    y_true = tf.cast(y_true, y_pred.dtype)
     # y_true = tf.cast(y_true, y_pred.dtype)
     mse = tf.square(y_pred - y_true)
+    # weights = tf.cast(y_true>0, y_pred.dtype) + tf.cast(y_true==0, y_pred.dtype) * neg_weight
+    # mse = tf.reduce_sum(mse*weights)/tf.reduce_sum(weights)
+    mse = tf.reduce_mean(mse)
+    return mse
+
+
+def masked_mse(y_true, y_pred, mask):
+    '''
+    Args:
+        y_true: label map of size B x H x W x 1
+        y_pred: feature map of size B x H x W x 1
+        mask: size B x H x W x 1
+    '''
+    y_true = tf.cast(y_true, y_pred.dtype)
+    # y_true = tf.cast(y_true, y_pred.dtype)
+    mse = tf.square(y_pred - y_true)
+    mse = tf.reduce_sum(mse, axis=-1, keepdims=True)
+    mse = mse[mask>0]
     # weights = tf.cast(y_true>0, y_pred.dtype) + tf.cast(y_true==0, y_pred.dtype) * neg_weight
     # mse = tf.reduce_sum(mse*weights)/tf.reduce_sum(weights)
     mse = tf.reduce_mean(mse)

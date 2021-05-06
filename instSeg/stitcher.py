@@ -6,7 +6,6 @@ from skimage.measure import regionprops, label
 import copy
 import sys
 
-# META = {'image_sz': [], 'patch_sz': [], 'overlap': [], 'patches': []}
 META = {'image_sz': [], 'patches': {}}
 PATCH_META = {'path': None, 'data': None, 'position': [], 'size': []}
 

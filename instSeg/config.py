@@ -20,41 +20,55 @@ class Config(object):
         
         # backbone config
         self.backbone = 'uNet' # 'uNet2H', 'uNetSA', 'uNnetD'
+        self.D = 4
+        self.residual = False
         self.dropout_rate = 0.5
         self.batch_norm = True
         self.filters = 32
         self.net_upsample = 'interp' # 'interp', 'conv'
-        self.net_merge = 'cat' # 'add', 'cat'
+        self.net_merge = 'add' # 'add', 'cat'
 
         # losses
         self.focal_loss_gamma = 2.0
         self.sensitivity_specificity_loss_beta = 1.0
-        ## semantic loss
+        ## semantic module
         self.classes = 2
-        self.loss_semantic = 'dice'
-        self.weight_semantic = 1
+        self.semantic_loss = 'dice'
+        self.semantic_weight = 1
+        self.semantic_in_ram = False
         ## contour loss
-        self.loss_contour = 'focal_loss'
-        self.weight_contour = 1
+        self.contour_loss = 'focal_loss'
+        self.contour_weight = 1
         self.contour_radius = 1 
-        ## dist regression 
-        self.loss_dist = 'mse'
-        self.weight_dist = 1
+        self.contour_in_ram = False
+        ## euclidean dist transform regression
+        self.edt_loss = 'masked_mse'
+        self.edt_weight = 1
+        self.edt_normalize = False
+        self.edt_in_ram = False 
+        ## euclidean dist transform flow regression
+        self.edt_flow_loss = 'masked_mse'
+        self.edt_flow_weight = 1
+        self.edt_flow_normalize = True
+        self.edt_flow_in_ram = False 
         ## embedding loss
         self.embedding_dim = 8
-        self.loss_embedding = 'cos'
-        self.weight_embedding = 1
+        self.embedding_loss = 'cos'
+        self.embedding_weight = 1
         self.embedding_include_bg = True
         self.neighbor_distance = 0.03
         self.max_obj = MAX_OBJ
 
         # data augmentation
         self.flip = True
-        self.elastic_strength = 2
+        self.elastic_deform = True
+        self.elastic_strength = 200
         self.elastic_scale = 10
-        self.rotation = True
+        self.random_rotation = True
         self.random_crop = True
         self.random_crop_range = (0.6, 0.8)
+        self.random_gamma = True
+        self.random_gamma_range = (0.5, 2)
 
         # training config:
         self.train_epochs = 100
@@ -72,9 +86,14 @@ class Config(object):
         # embedding
         self.embedding_cluster = 'argmax' # 'argmax', 'meanshift', 'mws' 
         self.emb_thres=0.7
-        self.emb_dist_thres=5
-        self.emb_dist_intensity = 0
         self.emb_max_step=float('inf')
+        # distance regression map
+        self.edt_mode = 'thresholding' # 'thresholding', 'tracking'
+        self.tracking_iters = 10
+        self.edt_instance_thres = 0.3
+        self.edt_fg_thres = 0.05
+        # semantic
+        self.semantic_bg = 0
         # for all
         self.min_size=0
         self.max_size=float('inf')
