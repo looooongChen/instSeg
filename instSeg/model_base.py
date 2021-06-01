@@ -1,4 +1,4 @@
-# import tensorflow as tf 
+import tensorflow as tf 
 from tensorflow import keras
 import tensorflow.keras.backend as K 
 from instSeg.uNet import *
@@ -9,11 +9,12 @@ from instSeg.post_process import *
 from instSeg.evaluation import Evaluator
 from skimage.measure import regionprops
 import os
+import copy
 import numpy as np
 from abc import abstractmethod
+from instSeg.tfAugmentor.Augmentor import Augmentor 
 
 try:
-    import tfAugmentor as tfaug 
     augmntor_available = True
 except:
     augmntor_available = False
@@ -56,9 +57,11 @@ class ModelBase(object):
         ''' prepare loss functions and optimizer'''
 
         if self.config.lr_decay_period != 0:
-            self.optimizer = keras.optimizers.Adam(learning_rate=lambda : self.lr())
+            # self.optimizer = keras.optimizers.Adam(learning_rate=lambda : self.lr())
+            self.optimizer = keras.optimizers.RMSprop(learning_rate=lambda : self.lr())
         else:
-            self.optimizer = keras.optimizers.Adam(lr=self.config.train_learning_rate)
+            # self.optimizer = keras.optimizers.Adam(lr=self.config.train_learning_rate)
+            self.optimizer = keras.optimizers.RMSprop(lr=self.config.train_learning_rate)
 
         self.loss_fns = {}
         # semantic loss
@@ -66,11 +69,10 @@ class ModelBase(object):
                          'binary_crossentropy': L.bce,
                          'weighted_binary_crossentropy': L.wbce,
                          'balanced_binary_corssentropy': L.bbce,
-                         'dice': L.dice_union,
-                         'object_dice': L.object_dice,
-                         'dice_union': L.dice_union,
-                         'dice_square': L.dice_square,
+                         'dice': L.mdice,
+                         'binary_dice': L.binary_dice,
                          'generalised_dice': L.gdice,
+                         'mean_dice': L.mdice,
                          'focal_loss': lambda y_true, y_pred: L.focal_loss(y_true, y_pred, gamma=self.config.focal_loss_gamma),
                          'sensitivity_specificity': lambda y_true, y_pred: L.sensitivity_specificity_loss(y_true, y_pred, beta=self.config.sensitivity_specificity_loss_beta)}
         self.loss_fns['semantic'] = loss_semantic[self.config.semantic_loss] 
@@ -90,7 +92,7 @@ class ModelBase(object):
         loss_contour = {'binary_crossentropy': L.bce,
                         'weighted_binary_crossentropy': L.wbce,
                         'balanced_binary_corssentropy': L.bbce,
-                        'dice': L.dice_union,
+                        'dice': L.binary_dice,
                         'focal_loss': lambda y_true, y_pred: L.binary_focal_loss(y_true, y_pred, gamma=2.0)}
         self.loss_fns['contour'] = loss_contour[self.config.contour_loss]
 
@@ -107,6 +109,7 @@ class ModelBase(object):
             else:
                 data[k] = image_resize_np(data[k], (self.config.H, self.config.W), method='nearest')
 
+        data['instance'] = relabel_instance(data['instance']).astype(np.int32)
         data_to_keep = ['image']
 
         for m in modules:
@@ -143,8 +146,9 @@ class ModelBase(object):
                     keep_instance = True
                 
             if m == 'embedding':
-                required.append('adj_matrix')
+                data_to_keep.append('adj_matrix')
                 data['adj_matrix'] = adj_matrix(data['instance'], self.config.neighbor_distance, self.config.max_obj)
+                keep_instance = True
 
             if m == 'contour':
                 if self.config.contour_in_ram:
@@ -155,7 +159,6 @@ class ModelBase(object):
         
         if keep_instance:
             data_to_keep.append('instance')
-            data['instance'] = relabel_instance(data['instance']).astype(np.int32)
 
         for k in list(data.keys()):
             if k not in data_to_keep:
@@ -186,7 +189,7 @@ class ModelBase(object):
         if augmntor_available:
             image_list = ['image']
             label_list = []
-            for m in ds.element_spec.keys()  :
+            for m in ds.element_spec.keys():
                 if m == 'instance':
                     label_list.append('instance')
                 if m == 'semantic':
@@ -199,27 +202,35 @@ class ModelBase(object):
                 if m == 'contour':
                     label_list.append('contour')
 
-            keys = image_list + label_list
+            # keys = image_list + label_list
+            keys = copy.deepcopy(ds.element_spec)
+            for k, _ in keys.items():
+                keys[k] = k
             aug_ds = []
             if self.config.flip:
-                aug_flip = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                # aug_flip = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                aug_flip = Augmentor(signature=keys, image=image_list, label=label_list)
                 aug_flip.flip_left_right(probability=0.8)
                 aug_flip.flip_up_down(probability=0.8)
                 aug_ds.append(aug_flip(ds))
             if self.config.elastic_deform:
-                aug_elas = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                # aug_elas = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                aug_elas = Augmentor(signature=keys, image=image_list, label=label_list)
                 aug_elas.elastic_deform(strength=self.config.elastic_strength, scale=self.config.elastic_scale, probability=1)
                 aug_ds.append(aug_elas(ds))
             if self.config.random_rotation:
-                aug_rotation = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                # aug_rotation = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                aug_rotation = Augmentor(signature=keys, image=image_list, label=label_list)
                 aug_rotation.random_rotate(probability=1)
                 aug_ds.append(aug_rotation(ds))
             if self.config.random_crop:
-                aug_crop = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                # aug_crop = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                aug_crop = Augmentor(signature=keys, image=image_list, label=label_list)
                 aug_crop.random_crop(scale_range=self.config.random_crop_range, probability=1)
                 aug_ds.append(aug_crop(ds))
             if self.config.random_gamma:
-                aug_gamma = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                # aug_gamma = tfaug.Augmentor(signature=keys, image=image_list, label=label_list)
+                aug_gamma = Augmentor(signature=keys, image=image_list, label=label_list)
                 aug_gamma.random_gamma(gamma_range=self.config.random_gamma_range, probability=1)
                 aug_ds.append(aug_gamma(ds))
 
@@ -378,6 +389,7 @@ class InstSegMul(ModelBase):
                     loss = 0
                     outs = [outs] if len(self.config.modules) == 1 else outs
                     for m, out in zip(self.config.modules, outs):
+                        ds_item = self.get_training_batch(ds_item)
                         l = self._module_loss(m, out, ds_item)
                         print('validation example with loss: {:5f}'.format(l))
                         loss += l
@@ -464,7 +476,6 @@ class InstSegMul(ModelBase):
         if validation_data is None or len(validation_data['image']) == 0:
             val_ds = None
         else:
-            modules_dict['instance'] = True
             if self.config.save_best_metric == 'loss':
                 val_ds = self.data_loader(validation_data, self.config.modules).batch(1)
             else:
@@ -503,7 +514,8 @@ class InstSegMul(ModelBase):
                     # summary output
                     if self.training_step % 200 == 0 and image_summary:
                         with self.train_summary_writer.as_default():
-                            tf.summary.image('input_img', tf.cast(ds_item['image'], tf.uint8), step=self.training_step, max_outputs=1)
+                            vis_image = ds_item['image']/tf.math.reduce_max(ds_item['image'], axis=[1,2], keepdims=True)*255
+                            tf.summary.image('input_img', tf.cast(vis_image, tf.uint8), step=self.training_step, max_outputs=1)
                             outs_dict = {k: v for k, v in zip(self.config.modules, outs)}
                             # semantic
                             if 'semantic' in outs_dict.keys():
@@ -529,7 +541,7 @@ class InstSegMul(ModelBase):
                                     vis_embedding = outs_dict['embedding'][:,:,:,3*i:3*(i+1)]
                                     tf.summary.image('embedding_{}-{}'.format(3*i+1, 3*i+3), vis_embedding, step=self.training_step, max_outputs=1)
                                     if not self.config.embedding_include_bg:
-                                        vis_embedding = vis_embedding * tf.cast(ds_item['object'] > 0, vis_embedding.dtype)
+                                        vis_embedding = vis_embedding * tf.cast(ds_item['instance'] > 0, vis_embedding.dtype)
                                         tf.summary.image('embedding_masked_{}-{}'.format(3*i+1, 3*i+3), vis_embedding, step=self.training_step, max_outputs=1)
  
             self.training_epoch += 1

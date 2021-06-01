@@ -123,13 +123,13 @@ def edt(label, normalize=True, bg=False, process_disp=False):
         dts.append(dt)
     return np.expand_dims(np.array(dts), axis=-1)
 
-def edt_flow(label, normalize=True, bg=False, process_disp=False):
-    flow = edt(label, normalize=False, bg=bg)
-    flow = np.concatenate(np.gradient(flow, axis=[1,2]), axis=-1)
-    flow = gaussian_filter(flow, [0,3,3,0])
-    if normalize:
-        flow = flow / (np.linalg.norm(flow, ord=2, axis=-1, keepdims=True)+1e-7)
-    return flow
+# def edt_flow(label, normalize=True, bg=False, process_disp=False):
+#     flow = edt(label, normalize=False, bg=bg)
+#     flow = np.concatenate(np.gradient(flow, axis=[1,2]), axis=-1)
+#     flow = gaussian_filter(flow, [0,3,3,0])
+#     if normalize:
+#         flow = flow / (np.linalg.norm(flow, ord=2, axis=-1, keepdims=True)+1e-7)
+#     return flow
 
 
 def contour(label, radius=2, process_disp=False):

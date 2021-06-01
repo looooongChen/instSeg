@@ -19,13 +19,16 @@ class Config(object):
         self.image_channel = image_channel
         
         # backbone config
-        self.backbone = 'uNet' # 'uNet2H', 'uNetSA', 'uNnetD'
-        self.D = 4
+        self.backbone = 'uNet' # 'uNet', 'resnet50', 'resnet101'
+        self.filters = 64
+        ## config for specific to unet
+        self.pooling_stage = 4
+        self.block_conv = 2
+        self.padding = 'same'
         self.residual = False
         self.dropout_rate = 0.5
         self.batch_norm = True
-        self.filters = 32
-        self.net_upsample = 'interp' # 'interp', 'conv'
+        self.net_upsample = 'deconv' # 'interp', 'deconv'
         self.net_merge = 'add' # 'add', 'cat'
 
         # losses
@@ -39,7 +42,7 @@ class Config(object):
         ## contour loss
         self.contour_loss = 'focal_loss'
         self.contour_weight = 1
-        self.contour_radius = 1 
+        self.contour_radius = 2 
         self.contour_in_ram = False
         ## euclidean dist transform regression
         self.edt_loss = 'masked_mse'
@@ -53,6 +56,7 @@ class Config(object):
         self.edt_flow_in_ram = False 
         ## embedding loss
         self.embedding_dim = 8
+        self.embedding_positional = None # 'global', 'octave'
         self.embedding_loss = 'cos'
         self.embedding_weight = 1
         self.embedding_include_bg = True

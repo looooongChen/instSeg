@@ -5,7 +5,7 @@ class ResNetSeg(tf.keras.Model):
 
     def __init__(self,
                  input_shape = (512,512,3),
-                 filters=32,
+                 filters=64,
                  layers=50,
                  name='ResNetSeg',
                  **kwargs):

@@ -77,29 +77,28 @@ def bbce(y_true, y_pred, w=None):
 #### dice loss ####
 ###################
 
-def dice_square(y_true, y_pred):
+# def dice_square(y_true, y_pred):
+#     '''
+#     Args:
+#         y_true: label map of size B x H x W x 1
+#         y_pred: feature map of size B x H x W x 1, 'sigmoid' activated
+#             or B x H x W x 2, softmax activated
+#     '''
+
+#     y_true = tf.cast(y_true[:,:,:,-1], y_pred.dtype)
+#     y_pred = y_pred[:,:,:,-1]
+
+#     numerator = tf.reduce_sum(y_true * y_pred, axis=[1, 2])
+#     denominator = tf.reduce_sum(y_true ** 2, axis=[1, 2]) + tf.reduce_sum(y_pred ** 2, axis=[1, 2])
+
+#     dice_loss = 1 - 2 * numerator / (denominator + + K.epsilon())
+#     return tf.reduce_mean(dice_loss)
+
+def binary_dice(y_true, y_pred):
     '''
     Args:
         y_true: label map of size B x H x W x 1
-        y_pred: feature map of size B x H x W x 1, 'sigmoid' activated
-            or B x H x W x 2, softmax activated
-    '''
-
-    y_true = tf.cast(y_true[:,:,:,-1], y_pred.dtype)
-    y_pred = y_pred[:,:,:,-1]
-
-    numerator = tf.reduce_sum(y_true * y_pred, axis=[1, 2])
-    denominator = tf.reduce_sum(y_true ** 2, axis=[1, 2]) + tf.reduce_sum(y_pred ** 2, axis=[1, 2])
-
-    dice_loss = 1 - 2 * numerator / (denominator + + K.epsilon())
-    return tf.reduce_mean(dice_loss)
-
-def dice_union(y_true, y_pred):
-    '''
-    Args:
-        y_true: label map of size B x H x W x 1
-        y_pred: feature map of size B x H x W x 1, 'sigmoid' activated
-            or B x H x W x 2, softmax activated
+        y_pred: feature map of size B x H x W x 1, 'sigmoid' activated or B x H x W x 2, softmax activated
     '''
 
     y_true = tf.cast(y_true[:,:,:,-1], y_pred.dtype)
@@ -111,34 +110,6 @@ def dice_union(y_true, y_pred):
     dice_loss = 1 - (2 * numerator + 1) / (denominator + 1)
     return tf.reduce_mean(dice_loss)
 
-
-def object_dice(y_true, y_pred, beta=0.9):
-    '''
-    Args:
-        y_true: label map of size B x H x W x 1
-        y_pred: feature map of size B x H x W x 1, 'sigmoid' activated
-            or B x H x W x 2, softmax activated
-    '''
-
-    y_true = y_true[:,:,:,-1]
-    y_pred = y_pred[:,:,:,-1]
-
-    losses = []
-    for i in range(y_true.shape[0]):
-        obj_loss = []
-        yy_true = tf.cast(y_true[i], tf.int32)
-        yy_pred = y_pred[i]
-        labels, _ = tf.unique(tf.reshape(yy_true, [-1]))
-        for l in labels:
-            # if l == 0:
-            #     continue
-            obj = tf.cast(yy_true==l, yy_pred.dtype)
-            occupy = tf.reduce_sum(obj*yy_pred)/(tf.reduce_sum(obj)+ K.epsilon())
-            obj_loss.append(1-occupy)
-        loss = tf.reduce_mean(obj_loss)
-        losses.append(loss)
-
-    return tf.reduce_mean(losses)
 
 def gdice(y_true, y_pred):
     '''
@@ -162,6 +133,23 @@ def gdice(y_true, y_pred):
     denominator = w * denominator
 
     dice_loss = 1 - (2 * tf.reduce_sum(numerator, axis=1) + 1)/ (tf.reduce_sum(denominator, axis=1) + 1)
+    return tf.reduce_mean(dice_loss)
+
+def mdice(y_true, y_pred):
+    '''
+    Args:
+        y_true: label map of size B x H x W x 1
+        y_pred: feature map of size B x H x W x C, 'softmax' activated
+    '''
+    y_true_onehot = tf.cast(tf.squeeze(y_true, axis=-1), tf.int32)
+    y_true_onehot = K.cast_to_floatx(K.one_hot(y_true_onehot, y_pred.shape[-1]))
+    y_pred = K.cast_to_floatx(y_pred)
+
+    numerator = tf.reduce_sum(y_true_onehot * y_pred, axis=[1, 2]) 
+
+    denominator = tf.reduce_sum(y_true_onehot + y_pred, axis=[1, 2])
+
+    dice_loss = 1 - (2 * numerator + 1) / (denominator + 1 )
     return tf.reduce_mean(dice_loss)
 
 def sensitivity_specificity_loss(y_true, y_pred, beta=1):
@@ -275,11 +263,12 @@ def cosine_embedding_loss(y_true, y_pred, adj_indicator, max_obj, include_backgr
             label_flat = tf.boolean_mask(label_flat, ind)
             pred_flat = tf.boolean_mask(pred_flat, ind)
 
+
         # grouping labels
         unique_labels, unique_id, counts = tf.unique_with_counts(label_flat)
         counts = tf.reshape(K.cast_to_floatx(counts), (-1, 1))
         instance_num = tf.size(unique_labels, out_type=tf.int32)
-        label_depth = instance_num if include_background else instance_num + 1
+        # label_num = instance_num if include_background else instance_num + 1
         # compute mean embedding of each instance
         segmented_sum = tf.math.unsorted_segment_sum(pred_flat, unique_id, instance_num)
         counts = tf.stop_gradient(counts)
