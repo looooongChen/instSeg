@@ -4,8 +4,8 @@ from tensorflow.keras.layers import UpSampling2D, Conv2D
 class ResNetSeg(tf.keras.Model):
 
     def __init__(self,
-                 input_shape = (512,512,3),
-                 filters=64,
+                 input_shape=(512,512,3),
+                 filters=32,
                  layers=50,
                  name='ResNetSeg',
                  **kwargs):
@@ -45,9 +45,9 @@ class ResNetSeg(tf.keras.Model):
         self.ft_conv = Conv2D(filters, 3, padding='same')
 
         
-    def call(self, inputs):
+    def call(self, inputs, training=False):
         
-        ft2, ft4, ft8, ft16, ft32 = self.backbone(inputs)
+        ft2, ft4, ft8, ft16, ft32 = self.backbone(inputs, training)
 
         ft = self.ft32_up(self.ft32_conv(ft32)) + ft16 
         ft = self.ft16_up(self.ft16_conv(ft)) + ft8 

@@ -17,19 +17,20 @@ class Config(object):
         self.H = 512
         self.W = 512
         self.image_channel = image_channel
+        self.positional_input = None # 'globalCoords', 'octave0', ...
         
         # backbone config
         self.backbone = 'uNet' # 'uNet', 'resnet50', 'resnet101'
         self.filters = 64
         ## config for specific to unet
-        self.pooling_stage = 4
-        self.block_conv = 2
-        self.padding = 'same'
+        self.weight_decay = 1e-4
+        self.nstage = 5
+        self.stage_conv = 2
         self.residual = False
         self.dropout_rate = 0.5
         self.batch_norm = True
-        self.net_upsample = 'deconv' # 'interp', 'deconv'
-        self.net_merge = 'add' # 'add', 'cat'
+        self.net_upsample = 'deConv' # 'upConv', 'deConv'
+        self.net_merge = 'cat' # 'add', 'cat'
 
         # losses
         self.focal_loss_gamma = 2.0
@@ -45,9 +46,9 @@ class Config(object):
         self.contour_radius = 2 
         self.contour_in_ram = False
         ## euclidean dist transform regression
-        self.edt_loss = 'masked_mse'
+        self.edt_loss = 'mse'
         self.edt_weight = 1
-        self.edt_normalize = False
+        self.edt_normalize = True
         self.edt_in_ram = False 
         ## euclidean dist transform flow regression
         self.edt_flow_loss = 'masked_mse'
@@ -65,13 +66,13 @@ class Config(object):
 
         # data augmentation
         self.flip = True
-        self.elastic_deform = True
+        self.elastic_deform = False
         self.elastic_strength = 200
         self.elastic_scale = 10
         self.random_rotation = True
         self.random_crop = True
         self.random_crop_range = (0.6, 0.8)
-        self.random_gamma = True
+        self.random_gamma = False
         self.random_gamma_range = (0.5, 2)
 
         # training config:
@@ -85,22 +86,25 @@ class Config(object):
         self.validation_start_epoch = 1
 
         # post-process
+        # object filtering
+        self.obj_min_edt = 2
+        self.obj_min_size=0
+        self.obj_max_size=float('inf')
+
         # dcan
         self.dcan_thres_contour=0.5
         # embedding
-        self.embedding_cluster = 'argmax' # 'argmax', 'meanshift', 'mws' 
-        self.emb_thres=0.7
-        self.emb_max_step=float('inf')
+        # self.embedding_cluster = 'argmax' # 'argmax', 'meanshift', 'mws' 
+        self.emb_cluster_thres=0.7
+        self.emb_cluster_max_step=float('inf')
         # distance regression map
-        self.edt_mode = 'thresholding' # 'thresholding', 'tracking'
-        self.tracking_iters = 10
-        self.edt_instance_thres = 0.3
-        self.edt_fg_thres = 0.05
+        # self.edt_mode = 'thresholding' # 'thresholding', 'tracking'
+        # self.tracking_iters = 10
+        self.edt_instance_thres = 5
+        self.edt_fg_thres = 3
         # semantic
         self.semantic_bg = 0
-        # for all
-        self.min_size=0
-        self.max_size=float('inf')
+        
     
     def save(self, path):
         if path.endswith('.pkl'):
@@ -118,7 +122,7 @@ class ConfigCascade(Config):
     def __init__(self, image_channel=3):
         super().__init__(image_channel=image_channel)
         self.model_type = MODEL_CASCADE
-        self.modules = ['semantic', 'dist', 'embedding']
+        self.modules = ['semantic', 'edt', 'embedding']
         # config feature forward
         self.feature_forward_dimension = 32
         self.stop_gradient = True
@@ -128,5 +132,5 @@ class ConfigParallel(Config):
     def __init__(self, image_channel=3):
         super().__init__(image_channel=image_channel)
         self.model_type = MODEL_PARALLEL
-        self.modules = ['semantic', 'contour']
+        self.modules = ['semantic', 'edt']
 

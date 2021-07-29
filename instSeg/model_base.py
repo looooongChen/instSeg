@@ -40,6 +40,22 @@ class ModelBase(object):
         self.augmntor_available = augmntor_available
         # validation
         self.best_score = None
+        # input positional aug
+        coordX, coordY = tf.meshgrid(tf.range(0,self.config.W), tf.range(0,self.config.H))
+        coordX, coordY = coordX / self.config.W - 0.5, coordY / self.config.H - 0.5
+        coords = tf.expand_dims(tf.stack([coordX, coordY], axis=-1), axis=0)
+        if self.config.positional_input == 'globalCoords':
+            self.coords = coords
+        elif self.config.positional_input == 'octave0':
+            self.coords = tf.math.sin(coords)
+        elif self.config.positional_input == 'octave1':
+            self.coords = tf.math.sin(2*coords)
+        elif self.config.positional_input == 'octave2':
+            self.coords = tf.math.sin(4*coords)
+        elif self.config.positional_input == 'octave3':
+            self.coords = tf.math.sin(8*coords)
+        elif self.config.positional_input == 'octave4':
+            self.coords = tf.math.sin(16*coords)
         # build model
         self.build_model()
 
@@ -240,7 +256,14 @@ class ModelBase(object):
 
     def load_weights(self, load_best=False, weights_only=False):
 
-        weights_path = self.weights_best if load_best else self.weights_latest
+        if load_best:
+            if os.path.exists(self.weights_best):
+                weights_path = self.weights_best 
+            else:
+                print(" ==== Weights Best not found, Weights Latest loaded ==== ")
+                weights_path = self.weights_latest
+        else:
+            weights_path = self.weights_latest
         cp_file = tf.train.latest_checkpoint(weights_path)
         
         if cp_file is not None:
@@ -265,7 +288,7 @@ class ModelBase(object):
                 # print('current best score: ', self.best_score)
             print(disp)
         else:
-            print("Model not found!")
+            print("==== Model not found! ====")
     
     # def save_weights(self, stage_wise=False, save_best=False):
     def save_weights(self, save_best=False):
@@ -368,9 +391,9 @@ class InstSegMul(ModelBase):
             if 'edt' in raw.keys():
                 instances = instance_from_edt(raw, self.config)
             
-        if self.config.min_size > 0 or self.config.max_size < float('inf'):
+        if self.config.obj_min_size > 0 or self.config.obj_max_size < float('inf'):
             for r in regionprops(instances):
-                if r.area < self.config.min_size or r.area > self.config.max_size:
+                if r.area < self.config.obj_min_size or r.area > self.config.obj_max_size:
                     instances[r.coords[:,0], r.coords[:,1]] = 0
 
         return instances
@@ -489,7 +512,7 @@ class InstSegMul(ModelBase):
             for ds_item in train_ds:
                 ds_item = self.get_training_batch(ds_item)
                 with tf.GradientTape() as tape:
-                    outs = self.model(ds_item['image'])
+                    outs = self.model(ds_item['image'], training=True)
                     if len(self.config.modules) == 1:
                         outs = [outs]
 
@@ -497,6 +520,7 @@ class InstSegMul(ModelBase):
                     for m, out in zip(self.config.modules, outs):
                         losses[m] = self._module_loss(m, out, ds_item)
                         loss += losses[m]
+                    loss += sum(self.model.losses)
                     
                     grads = tape.gradient(loss, self.model.trainable_weights)
                     self.optimizer.apply_gradients(zip(grads, self.model.trainable_weights))

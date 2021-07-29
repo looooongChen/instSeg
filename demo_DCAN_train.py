@@ -16,10 +16,9 @@ config.train_learning_rate = 1e-5
 config.lr_decay_rate = 0.9
 config.lr_decay_period = 20000
 config.train_batch_size = 2
-config.backbone = 'resnet101'
-config.filters = 32
+config.backbone = 'uNet'
 config.save_best_metric == 'mAP'
-model_dir = './model_DCAN_cyst512_resnet101'
+model_dir = './model_DCAN'
 
 X_train, y_train = [], [] # list of img/gt path for training
 X_val, y_val = [], [] # list of img/gt path for test

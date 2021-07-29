@@ -8,20 +8,20 @@ from skimage.segmentation import watershed
 from instSeg.flow import *
 
 
-def instance_from_emb_and_dist(raw, config):
+def instance_from_emb_and_edt(raw, config):
     '''
     raw: a dict containing predictions of at least 'embedding', 'edt'
     Parameters should be set in config:
-        emb_thres: threshold distinguishing object in the embedding space
-        dist_thres: threshold to get seeds from distance regression map
+        emb_cluster_thres: threshold distinguishing object in the embedding space
+        emb_cluster_max_step: max step for expanding the instance region
+        edt_instance_thres: threshold to get seeds from distance regression map
         dist_intensity: if only instance is not evident, ignore
-        emb_max_step: max step for expanding the instance region
     '''
-    embedding, dist = np.squeeze(raw['embedding']), np.squeeze(raw['edt'])
+    embedding, edt = np.squeeze(raw['embedding']), np.squeeze(raw['edt'])
     # embedding = smooth_emb(embedding, 3)
     emebdding = embedding / (1e-8 + np.linalg.norm(embedding, ord=2, axis=-1, keepdims=True))
-    dist = gaussian(dist, sigma=1)
-    regions = label(dist > config.dist_thres)
+    edt = gaussian(edt, sigma=1)
+    regions = label(edt > config.edt_instance_thres)
     props = regionprops(regions)
 
     mean = {}
@@ -38,17 +38,17 @@ def instance_from_emb_and_dist(raw, config):
 
         similarity = [np.dot(embedding[r, c, :], mean[dilated[r, c]])
                       for r, c in zip(front_r, front_c)]
-        add_ind = np.array([s > config.emb_thres for s in similarity])
+        add_ind = np.array([s > config.emb_cluster_thres for s in similarity])
 
         if np.all(add_ind == False):
             break
         regions[front_r[add_ind], front_c[add_ind]] = dilated[front_r[add_ind], front_c[add_ind]]
         step += 1
-        if step > config.emb_max_step:
+        if step > config.emb_cluster_max_step:
             break
 
-    for p in regionprops(regions, intensity_image=dist):
-        if p.mean_intensity < config.dist_intensity:
+    for p in regionprops(regions, intensity_image=edt):
+        if p.mean_intensity < config.obj_min_edt:
             regions[p.coords[:,0], p.coords[:,1]] = 0
 
     return regions

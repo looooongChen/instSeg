@@ -18,16 +18,16 @@ class InstSegCascade(InstSegMul):
         self.normalized_img = tf.image.per_image_standardization(self.input_img)
 
         if self.config.backbone.startswith('uNet'):
-            backbone_arch = lambda name: UNet(pooling_stage=self.config.pooling_stage,
-                                              block_conv=self.config.block_conv,
-                                              padding='same',
-                                              residual=self.config.residual,
-                                              filters=self.config.filters,
-                                              dropout_rate=self.config.dropout_rate,
-                                              batch_norm=self.config.batch_norm,
-                                              upsample=self.config.net_upsample,
-                                              merge=self.config.net_merge,
-                                              name=name)
+            backbone_arch = lambda name: UNet(nfilters=self.config.filters,
+                                            nstage=self.config.nstage,
+                                            stage_conv=self.config.stage_conv,
+                                            residual=self.config.residual,
+                                            dropout_rate=self.config.dropout_rate,
+                                            batch_norm=self.config.batch_norm,
+                                            up_type=self.config.net_upsample, 
+                                            merge_type=self.config.net_merge, 
+                                            weight_decay=self.config.weight_decay,
+                                            name=name)
         elif self.config.backbone.startswith('resnet'):
             if self.config.backbone == 'resnet50':
                 backbone_arch = lambda name: ResNetSeg(input_shape=(self.config.H, self.config.W, 3), filters=self.config.filters, layers=50, name=name)
@@ -49,10 +49,7 @@ class InstSegCascade(InstSegMul):
             else:
                 input_list = [self.normalized_img]
 
-            backbone = backbone_arch(filters=self.config.filters,
-                                     dropout_rate=self.config.dropout_rate,
-                                     batch_norm=self.config.batch_norm,
-                                     name='net_'+m)
+            backbone = backbone_arch(name='net_'+m)
             features = backbone(K.concatenate(input_list, axis=-1))
 
             if m == 'semantic':

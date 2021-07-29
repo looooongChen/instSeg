@@ -49,6 +49,7 @@ def relabel_instance(instance, background=0):
 def adj_matrix(labels, radius, max_obj=300):
     
     '''
+    labels should be continue, starting from 0
     Args:
         labels: label map of size B x H x W x 1 or B x H x W
         radius: radius to determine neighbout relationship
@@ -78,6 +79,18 @@ def adj_matrix(labels, radius, max_obj=300):
         adjs.append(adj)
     
     return np.array(adjs, dtype=np.bool)
+
+def mean_embedding(labels, embedding):
+    '''
+    Args:
+        labels: H x W 
+        embdding: H x W x C
+    '''
+    objs = regionprops(labels)
+    m = {}
+    for obj in objs:
+        m[obj.label] = np.mean(embedding[obj.coords[:,0], obj.coords[:,1], :], axis=0)
+    return m
 
 def disk_tf(radius, channel=1, dtype=tf.int32): 
     '''

@@ -6,6 +6,8 @@ from instSeg.enumDef import *
 from instSeg.uNet import *
 from instSeg.ResNetSeg import *
 from instSeg.utils import *
+from instSeg.layers import *
+import tensorflow as tf
 import os
 
 
@@ -16,6 +18,7 @@ class InstSegParallel(InstSegMul):
         self.config.model_type = MODEL_PARALLEL
         # assert len(config.modules) == 2
 
+
     def build_model(self):
 
         if self.config.backbone.startswith('resnet'):
@@ -24,18 +27,23 @@ class InstSegParallel(InstSegMul):
         self.input_img = keras.layers.Input((self.config.H, self.config.W, self.config.image_channel), name='input_img')
         self.normalized_img = tf.image.per_image_standardization(self.input_img)
 
+        if self.config.positional_input is not None:
+            coords = tf.repeat(self.coords, tf.shape(self.normalized_img)[0], axis=0)
+            coords = tf.stop_gradient(K.cast_to_floatx(coords))
+            self.normalized_img = tf.concat([self.normalized_img, coords], axis=-1)
+
         output_list = []
 
         if self.config.backbone.startswith('uNet'):
-            self.net = UNet(pooling_stage=self.config.pooling_stage,
-                            block_conv=self.config.block_conv,
-                            padding='same',
+            self.net = UNet(nfilters=self.config.filters,
+                            nstage=self.config.nstage,
+                            stage_conv=self.config.stage_conv,
                             residual=self.config.residual,
-                            filters=self.config.filters,
                             dropout_rate=self.config.dropout_rate,
                             batch_norm=self.config.batch_norm,
-                            upsample=self.config.net_upsample,
-                            merge=self.config.net_merge,
+                            up_type=self.config.net_upsample, 
+                            merge_type=self.config.net_merge, 
+                            weight_decay=self.config.weight_decay,
                             name='UNet')
         elif self.config.backbone.startswith('resnet'):
             if self.config.backbone == 'resnet50':
@@ -68,7 +76,12 @@ class InstSegParallel(InstSegMul):
                 outlayer = keras.layers.Conv2D(filters=2, kernel_size=1, activation='linear')
                 out = outlayer(features[idx])
             if m == 'embedding':
-                outlayer = keras.layers.Conv2D(filters=self.config.embedding_dim, kernel_size=1, activation='linear')
+                if self.config.embedding_positional is None:
+                    outlayer = keras.layers.Conv2D(filters=self.config.embedding_dim, kernel_size=1, activation='linear')
+                elif self.config.embedding_positional == 'trainable':
+                    outlayer = ConvPos(self.config.embedding_dim, channels=1, kernel_size=1, activation='linear')
+                else:
+                    outlayer = EmbeddingPos(self.config.embedding_dim, self.config.embedding_positional)
                 out = outlayer(features[idx])
             output_list.append(out)     
                     
