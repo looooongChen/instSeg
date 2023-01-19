@@ -79,12 +79,24 @@ class Config(object):
         self.layering = 'embedding'
         
         # data augmentation
-        self.flip = True
-        self.random_rotation = True
-        self.random_gamma = True
+        self.flip = False
+        self.random_rotation = False
+        self.random_rotation_p = 0.5
+        self.random_shift = False
+        self.random_shift_p = 0.5
+        self.max_shift = 64 # maximal shift
+        self.random_gamma = False
+        self.random_gamma_p = 0.2
         self.random_blur = False
+        self.random_blur_p = 0.1
         self.random_saturation = False
+        self.random_saturation_p = 0.2
         self.random_hue = False
+        self.random_hue_p = 0.2
+        self.elastic_deform = False
+        self.elastic_deform_p = 0.8
+        self.deform_scale = [16,256]
+        self.deform_strength = 0.25
 
         # training config:
         self.ds_repeat = 1
@@ -93,6 +105,7 @@ class Config(object):
         self.train_learning_rate = 1e-4
         self.lr_decay_period = 10000
         self.lr_decay_rate = 0.9
+        self.summary_step = 100
 
         # validation 
         self.snapshots = []
@@ -111,27 +124,30 @@ class Config(object):
             with open(path, 'wb') as output:
                 pickle.dump(self, output, pickle.HIGHEST_PROTOCOL)
 
+# for back compatability
+ConfigCascade = Config
+ConfigParallel = Config
 
 # class ConfigContour(Config):
 
 #     def __init__(self, image_channel=3):
 #         super().__init__(image_channel=image_channel)
 
-class ConfigCascade(Config):
+# class ConfigCascade(Config):
 
-    def __init__(self, image_channel=3):
-        super().__init__(image_channel=image_channel)
-        self.model_type = MODEL_CASCADE
-        self.modules = ['foreground', 'edt', 'embedding']
-        # config feature forward
-        self.feature_forward_dimension = 32
-        self.feature_forward_normalization = 'z-score' # 'z-score', 'l2'
-        self.stop_gradient = True
+#     def __init__(self, image_channel=3):
+#         super().__init__(image_channel=image_channel)
+#         self.model_type = MODEL_CASCADE
+#         self.modules = ['foreground', 'edt', 'embedding']
+#         # config feature forward
+#         self.feature_forward_dimension = 32
+#         self.feature_forward_normalization = 'z-score' # 'z-score', 'l2'
+#         self.stop_gradient = True
 
-class ConfigParallel(Config):
+# class ConfigParallel(Config):
 
-    def __init__(self, image_channel=3):
-        super().__init__(image_channel=image_channel)
-        self.model_type = MODEL_PARALLEL
-        self.modules = ['foreground', 'edt']
+#     def __init__(self, image_channel=3):
+#         super().__init__(image_channel=image_channel)
+#         self.model_type = MODEL_PARALLEL
+#         self.modules = ['foreground', 'edt']
 

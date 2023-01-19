@@ -34,10 +34,9 @@ class Generator(object):
         obj_color: color of the object
         bg_color: color of the background
         '''
-        obj = np.zeros((sz, sz, 3))
-        obj_color = [random.randint(1, 255), random.randint(1, 255), random.randint(1, 255)] if obj_color is None else tuple(reversed(obj_color))
+        obj = np.zeros((sz, sz, 3), np.uint8)
+        obj_color = [random.randint(1, 255), random.randint(1, 255), random.randint(1, 255)] if obj_color is None else obj_color
         if bg_color:
-            bg_color = tuple(reversed(bg_color))
             for i in range(3):
                 obj[:,:,i] += bg_color[i]
         R = sz // 2
@@ -76,7 +75,7 @@ class Generator(object):
         
         if self.config.pattern == 'grid':
             sz = int((2 * self.config.img_sz // obj_sz + 2) * obj_sz)
-            img = np.zeros((sz, sz, 3))
+            img = np.zeros((sz, sz, 3), np.uint8)
 
             bg_color = self.config.bg_color if self.config.bg_color is not None else (random.randint(1, 255), random.randint(1, 255), random.randint(1, 255))
 

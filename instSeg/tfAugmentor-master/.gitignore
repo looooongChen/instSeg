@@ -1,0 +1,5 @@
+dist/
+build/
+tfAugmentor.egg-info/
+__pycache__/
+tfAugmentor/__pycache__/

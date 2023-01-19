@@ -8,15 +8,14 @@ from instSeg.utils import *
 import instSeg.loss as L
 from instSeg.enumDef import *
 from instSeg.post_process import *
-from instSeg.flow import *
 from instSeg.evaluation import Evaluator
+from instSeg.data_augmentation import *
 import numpy as np
 from abc import abstractmethod
+from collections.abc import Iterable 
 from keras.layers import Conv2D
-import copy
 import os
 import cv2
-
 
 def input_process(x, config):
     if config.input_normalization == 'per-image':
@@ -210,18 +209,17 @@ class ModelBase(object):
         img_nearest = ['instance', 'foreground', 'contour']
         
         def map_func(d):
-            
             # flipping
             if self.config.flip:
-                p = tf.random.uniform((), minval=0, maxval=1)
+                flip_p = tf.random.uniform((), minval=0, maxval=1)
                 for k, im in d.items():
                     if k not in img_modification:
                         continue
-                    if p < 0.25:
+                    if flip_p < 0.25:
                         d[k] = tf.image.flip_left_right(im)
-                    elif p < 0.5:
+                    elif flip_p < 0.5:
                         d[k] = tf.image.flip_up_down(im)
-                    elif p < 0.75:
+                    elif flip_p < 0.75:
                         d[k] = tf.image.flip_left_right(tf.image.flip_up_down(im))
                     else:
                         pass
@@ -229,29 +227,69 @@ class ModelBase(object):
             if self.config.random_rotation:
                 angle = tf.cast(tf.random.uniform(shape=[], maxval=359, dtype=tf.int32), tf.float32)
                 angle = angle / 360 * (2*3.1415926)
+                random_rotation_p = tf.random.uniform((), minval=0, maxval=1)
                 for k, im in d.items():
-                    if k in img_bilinear:
-                        d[k] = tfa.image.rotate(d[k], angle, interpolation='bilinear')
-                    if k in img_nearest:
-                        d[k] = tfa.image.rotate(d[k], angle, interpolation='nearest')
+                    if random_rotation_p < self.config.random_rotation_p:
+                        if k in img_bilinear:
+                            d[k] = tfa.image.rotate(d[k], angle, interpolation='bilinear')
+                        if k in img_nearest:
+                            d[k] = tfa.image.rotate(d[k], angle, interpolation='nearest')
+            # random shift
+            if self.config.random_shift:
+                shift = tf.cast(tf.random.uniform(shape=[2], maxval=self.config.max_shift, dtype=tf.int32), tf.float32)
+                random_shift_p = tf.random.uniform((), minval=0, maxval=1)
+                for k, im in d.items():
+                    if random_shift_p < self.config.random_shift_p:
+                        if k in img_bilinear:
+                            d[k] = tfa.image.translate(d[k], shift, interpolation='bilinear')
+                        if k in img_nearest:
+                            d[k] = tfa.image.translate(d[k], shift, interpolation='nearest')
             # random gamma
-            if self.config.random_gamma and tf.random.uniform((), minval=0, maxval=1) < 0.5:
+            if self.config.random_gamma:
                 gamma = tf.random.uniform((), minval=1, maxval=2)
                 if tf.random.uniform((), minval=0, maxval=1) < 0.5:
                     gamma = 1/gamma
-                d['image'] = tf.image.adjust_gamma(d['image'], gamma=gamma, gain=1)
+                random_gamma_p = tf.random.uniform((), minval=0, maxval=1)
+                if random_gamma_p < self.config.random_gamma_p:
+                    Vmax = tf.cast(tf.reduce_max(d['image']), tf.float32) + 1
+                    # gain = Vmax / Vmax ** gamma
+                    d['image'] = tf.cast(tf.cast(d['image'], tf.float32) ** gamma / Vmax ** gamma * Vmax, d['image'].dtype)
+                    # d['image'] = tf.image.adjust_gamma(d['image'], gamma=gamma, gain=gain)
+                    # d['image'] = tf.image.adjust_gamma(d['image'], gamma=gamma, gain=1)
             # random satuation
-            if self.config.random_saturation and tf.random.uniform(()) < 1:
-                d['image'] = tf.image.random_saturation(d['image'], 0.5, 1.5)
+            if self.config.random_saturation:
+                random_saturation_p = tf.random.uniform((), minval=0, maxval=1)
+                if random_saturation_p < self.config.random_saturation_p:
+                    d['image'] = tf.image.random_saturation(d['image'], 0.5, 1.5)
             # random hue
-            if self.config.random_hue and tf.random.uniform(()) < 0.5:
-                d['image'] = tf.image.random_hue(d['image'], 0.05)
+            if self.config.random_hue:
+                random_hue_p = tf.random.uniform((), minval=0, maxval=1)
+                if random_hue_p < self.config.random_hue_p:
+                    d['image'] = tf.image.random_hue(d['image'], 0.05)
             # random blur
-            if self.config.random_blur and tf.random.uniform(()) < 0.2:
+            if self.config.random_blur:
                 # sigma = tf.cast(tf.random.uniform((), minval=1, maxval=3), tf.float32)
-                d['image'] = tfa.image.gaussian_filter2d(d['image'], (10, 10), sigma=2)
-
-
+                random_blur_p = tf.random.uniform((), minval=0, maxval=1)
+                if random_blur_p < self.config.random_blur_p:
+                    d['image'] = tfa.image.gaussian_filter2d(d['image'], (10, 10), sigma=2)
+            # elastic deform
+            if self.config.elastic_deform:
+                deform_scale = self.config.deform_scale if isinstance(self.config.deform_scale, Iterable) else [self.config.deform_scale, self.config.deform_scale+1] 
+                deform_strength = self.config.deform_strength if isinstance(self.config.deform_strength, Iterable) else [self.config.deform_strength, self.config.deform_strength + 0.0001]
+                scale = tf.random.uniform(shape=[], minval=deform_scale[0], maxval=deform_scale[1])
+                strength = tf.random.uniform(shape=[], minval=deform_strength[0]*scale, maxval=deform_strength[1]*scale)
+                # strength = tf.random.uniform(shape=[], minval=deform_strength[0], maxval=deform_strength[1])
+                # scale = self.config.deform_scale
+                # strength = self.config.deform_strength_max
+                flow = elastic_flow(tf.shape(d['image']), scale, strength)
+                elastic_deform_p = tf.random.uniform((), minval=0, maxval=1)
+                for k, im in d.items():
+                    if elastic_deform_p < self.config.elastic_deform_p:
+                        if k in img_bilinear:
+                            d[k] = warp_image(d[k], flow, interpolation='bilinear')
+                        if k in img_nearest:
+                            d[k] = warp_image(d[k], flow, interpolation='nearest')
+            
             return d
 
         ds = ds.map(map_func)
@@ -401,9 +439,9 @@ class ModelBase(object):
                         for m, l in module_losses.items():
                             tf.summary.scalar('loss_'+m, l, step=self.training_step)
                     # summary output
-                    if self.training_step % 200 == 0 and image_summary:
+                    if self.training_step % self.config.summary_step == 0 and image_summary:
                         with self.train_summary_writer.as_default():
-                            vis_image = ds_frame['image']/tf.math.reduce_max(ds_frame['image'], axis=[1,2], keepdims=True)*255
+                            vis_image = ds_frame['image']/tf.math.reduce_max(ds_frame['image'])*255
                             tf.summary.image('input_img', tf.cast(vis_image, tf.uint8), step=self.training_step, max_outputs=1)
                             outs_dict = {k: v for k, v in zip(self.modules, outs)}
                             # foreground

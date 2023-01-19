@@ -86,9 +86,10 @@ def trim_instance_label(masks, sz, process_disp=True):
             M_trimmed = np.zeros((sz[0], sz[1], obj_max), bool)
             for idx in range(len(M)):
                 if M[idx].shape[0] == sz[0] and M[idx].shape[1] == sz[1]:
-                    M_trimmed[...,idx] = cv2.resize(M[idx].astype(np.uint8), (sz[1], sz[0]), interpolation=cv2.INTER_NEAREST) > 0
-                else:
                     M_trimmed[...,idx] = M[idx] > 0
+                else:
+                    M_trimmed[...,idx] = cv2.resize(M[idx].astype(np.uint8), (sz[1], sz[0]), interpolation=cv2.INTER_NEAREST) > 0
+                    
             masks_trimmed.append(M_trimmed)
         masks_trimmed = np.array(masks_trimmed, bool)
     elif isinstance(masks, list):
