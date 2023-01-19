@@ -3,79 +3,91 @@
 import pickle
 from instSeg.enumDef import *
 
-MAX_OBJ = 300
-
 class Config(object):
 
     def __init__(self, image_channel=3):
 
         self.verbose = False
+        self.transfer_training = True
 
         self.model_type = MODEL_BASE
-        self.save_best_metric = 'mAJ' # 'mAJ'/'mAP'/'loss'
+        self.save_best_metric = 'AJI' # 'AJI'/'AP'/
         # input size
         self.H = 512
         self.W = 512
         self.image_channel = image_channel
-        self.positional_input = None # 'globalCoords', 'octave0', ...
+        # image normalization
+        self.input_normalization = 'per-image' # 'per-image', 'constant', None
+        self.input_normalization_bias = 0
+        self.input_normalization_scale = 1
         
         # backbone config
-        self.backbone = 'uNet' # 'uNet', 'resnet50', 'resnet101'
+        self.backbone = 'uNet' # 'uNet', 'ResNet50', 'ResNet101', 'ResNet152', 'EfficientNetB0' - 'EfficientNetB7'
         self.filters = 64
+        self.weight_decay = 1e-5
+        self.net_normalization = 'batch' # 'batch', None
+        self.dropout_rate = 0
+        self.up_scaling = 'upConv' # 'upConv', 'deConv'
+        self.concatenate = True
         ## config for specific to unet
-        self.weight_decay = 1e-4
-        self.nstage = 5
+        self.nstage = 4
         self.stage_conv = 2
-        self.residual = False
-        self.dropout_rate = 0.5
-        self.batch_norm = True
-        self.net_upsample = 'deConv' # 'upConv', 'deConv'
-        self.net_merge = 'cat' # 'add', 'cat'
 
         # losses
+        self.loss = {'foreground': 'crossentropy', 
+                     'contour': 'binary_crossentropy', 
+                     'edt': 'mse', 
+                     'flow': 'masked_mse', 
+                     'embedding': 'cos',
+                     'embedding_sigmoid': 'cos', 
+                     'layered_embedding': 'sparse_cos'}
+        self.loss_weights = {'foreground': 1, 'contour': 1, 'edt': 1, 'flow': 1, 'embedding': 1, 'layered_embedding': 1}
         self.focal_loss_gamma = 2.0
+        self.ce_neg_ratio = 2
         self.sensitivity_specificity_loss_beta = 1.0
-        ## semantic module
+        
+        self.post_processing = 'layered_embedding'
+
+        ## semantic segmentation
         self.classes = 2
-        self.semantic_loss = 'dice'
-        self.semantic_weight = 1
-        self.semantic_in_ram = False
+
+        ## foreground module
+        self.thres_foreground = 0.5
+        self.thres_layering = 0.5
+        
         ## contour loss
-        self.contour_loss = 'focal_loss'
-        self.contour_weight = 1
-        self.contour_radius = 2 
-        self.contour_in_ram = False
-        ## euclidean dist transform regression
-        self.edt_loss = 'mse'
-        self.edt_weight = 1
+        self.contour_radius = 1 
+        self.contour_mode = 'overlap_midline' # 'overlap_ignore' or 'overlap_midline'
+        self.thres_contour=0.5
+        
+        ## euclidean distance transform (EDT) regression
         self.edt_normalize = True
-        self.edt_in_ram = False 
-        ## euclidean dist transform flow regression
-        self.edt_flow_loss = 'masked_mse'
-        self.edt_flow_weight = 1
-        self.edt_flow_normalize = True
-        self.edt_flow_in_ram = False 
+        self.edt_scaling = 10 if self.edt_normalize else 1
+        self.edt_instance_thres = 5
+        self.edt_fg_thres = 1
+        
         ## embedding loss
         self.embedding_dim = 8
-        self.embedding_positional = None # 'global', 'octave'
-        self.embedding_loss = 'cos'
-        self.embedding_weight = 1
         self.embedding_include_bg = True
-        self.neighbor_distance = 0.03
-        self.max_obj = MAX_OBJ
-
+        self.neighbor_distance = 10
+        # self.positional_embedding = None # 'global', 'harmonic'
+        # self.octave = 4
+        self.emb_clustering = 'meanshift'
+        
+        ## layered instances
+        self.instance_layers = 8
+        self.layering = 'embedding'
+        
         # data augmentation
         self.flip = True
-        self.elastic_deform = False
-        self.elastic_strength = 200
-        self.elastic_scale = 10
         self.random_rotation = True
-        self.random_crop = True
-        self.random_crop_range = (0.6, 0.8)
-        self.random_gamma = False
-        self.random_gamma_range = (0.5, 2)
+        self.random_gamma = True
+        self.random_blur = False
+        self.random_saturation = False
+        self.random_hue = False
 
         # training config:
+        self.ds_repeat = 1
         self.train_epochs = 100
         self.train_batch_size = 3
         self.train_learning_rate = 1e-4
@@ -83,6 +95,7 @@ class Config(object):
         self.lr_decay_rate = 0.9
 
         # validation 
+        self.snapshots = []
         self.validation_start_epoch = 1
 
         # post-process
@@ -91,19 +104,6 @@ class Config(object):
         self.obj_min_size=0
         self.obj_max_size=float('inf')
 
-        # dcan
-        self.dcan_thres_contour=0.5
-        # embedding
-        # self.embedding_cluster = 'argmax' # 'argmax', 'meanshift', 'mws' 
-        self.emb_cluster_thres=0.7
-        self.emb_cluster_max_step=float('inf')
-        # distance regression map
-        # self.edt_mode = 'thresholding' # 'thresholding', 'tracking'
-        # self.tracking_iters = 10
-        self.edt_instance_thres = 5
-        self.edt_fg_thres = 3
-        # semantic
-        self.semantic_bg = 0
         
     
     def save(self, path):
@@ -122,9 +122,10 @@ class ConfigCascade(Config):
     def __init__(self, image_channel=3):
         super().__init__(image_channel=image_channel)
         self.model_type = MODEL_CASCADE
-        self.modules = ['semantic', 'edt', 'embedding']
+        self.modules = ['foreground', 'edt', 'embedding']
         # config feature forward
         self.feature_forward_dimension = 32
+        self.feature_forward_normalization = 'z-score' # 'z-score', 'l2'
         self.stop_gradient = True
 
 class ConfigParallel(Config):
@@ -132,5 +133,5 @@ class ConfigParallel(Config):
     def __init__(self, image_channel=3):
         super().__init__(image_channel=image_channel)
         self.model_type = MODEL_PARALLEL
-        self.modules = ['semantic', 'edt']
+        self.modules = ['foreground', 'edt']
 

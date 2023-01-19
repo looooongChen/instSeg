@@ -13,6 +13,7 @@ class UNet(tf.keras.Model):
                  nfilters=64,
                  nstage=5,
                  stage_conv=2,
+                 padding='same', # 'same', 'reflect'
                  residual=False,
                  dropout_rate=0.2,
                  dropout_type='default',  # 'spatial', 'default'
@@ -33,7 +34,8 @@ class UNet(tf.keras.Model):
 
         self.nstage = nstage - 1
         self.stage_conv = stage_conv
-        self.padding = 'same'
+        self.padding = padding
+        padding_ = 'same' if padding == 'same' else 'valid'
         self.residual = residual
         self.dropout_rate = dropout_rate
         self.batch_norm = True if self.residual else batch_norm
@@ -43,7 +45,7 @@ class UNet(tf.keras.Model):
         self.filters = [nfilters*2**i for i in range(self.nstage)] + [nfilters*2**(self.nstage-i) for i in range(self.nstage+1)]
         self.layers_c = {}
 
-        self.init_conv = Conv2D(self.filters[0], 3, padding=self.padding, kernel_initializer=kernel_initializer, use_bias=use_bias, kernel_regularizer=l2(weight_decay))
+        self.init_conv = Conv2D(self.filters[0], 3, padding=padding_, kernel_initializer=kernel_initializer, use_bias=use_bias, kernel_regularizer=l2(weight_decay))
 
         # convolutional, dropout (optional), batch normatlization (optional) and residual add (optional) layers
         for block_idx in range(2*self.nstage+1):
@@ -62,12 +64,12 @@ class UNet(tf.keras.Model):
                     else:
                         self.layers_c['dropout{:d}_{:d}'.format(block_idx, conv_idx)] = Dropout(self.dropout_rate)
                 # conv layers
-                self.layers_c['conv{:d}_{:d}'.format(block_idx, conv_idx)] = Conv2D(self.filters[block_idx], 3, padding=self.padding, kernel_initializer=kernel_initializer, use_bias=use_bias, kernel_regularizer=l2(weight_decay))
+                self.layers_c['conv{:d}_{:d}'.format(block_idx, conv_idx)] = Conv2D(self.filters[block_idx], 3, padding=padding_, kernel_initializer=kernel_initializer, use_bias=use_bias, kernel_regularizer=l2(weight_decay))
         
         # pooling layers of encoder path
         for block_idx in range(self.nstage):
             if residual:
-                self.layers_c['residualConv{:d}'.format(block_idx)] = Conv2D(self.filters[block_idx], 1, padding='same', kernel_initializer=kernel_initializer, use_bias=use_bias, kernel_regularizer=l2(weight_decay))
+                self.layers_c['residualConv{:d}'.format(block_idx)] = Conv2D(self.filters[block_idx], 1, padding='valid', kernel_initializer=kernel_initializer, use_bias=use_bias, kernel_regularizer=l2(weight_decay))
             self.layers_c['pool{:d}'.format(block_idx)] = MaxPooling2D(pool_size=(2, 2))
         
         # upsampling layers of decoder path
@@ -80,14 +82,14 @@ class UNet(tf.keras.Model):
             ## upsampling - upsampling
             if self.up_type == 'upConv':
                 self.layers_c['up{:d}'.format(block_idx)] = UpSampling2D(size=(2, 2), interpolation='bilinear')
-                self.layers_c['upConv{:d}'.format(block_idx)] = Conv2D(self.filters[block_idx], 3, padding='same', kernel_initializer=kernel_initializer, use_bias=use_bias, kernel_regularizer=l2(weight_decay))
+                self.layers_c['upConv{:d}'.format(block_idx)] = Conv2D(self.filters[block_idx], 3, padding=padding_, kernel_initializer=kernel_initializer, use_bias=use_bias, kernel_regularizer=l2(weight_decay))
             else:
                 self.layers_c['upConv{:d}'.format(block_idx)] = Conv2DTranspose(self.filters[block_idx], 4, 2, padding='same', kernel_initializer=kernel_initializer, use_bias=use_bias, kernel_regularizer=l2(weight_decay))
             # merge
             if self.merge_type == 'cat':
                 self.layers_c['merge{:d}'.format(block_idx)] = Concatenate(axis=-1)
                 if residual:
-                    self.layers_c['residualConv{:d}'.format(block_idx)] = Conv2D(self.filters[block_idx], 1, padding='same', kernel_initializer=kernel_initializer, use_bias=use_bias, kernel_regularizer=l2(weight_decay))
+                    self.layers_c['residualConv{:d}'.format(block_idx)] = Conv2D(self.filters[block_idx], 1, padding='valid', kernel_initializer=kernel_initializer, use_bias=use_bias, kernel_regularizer=l2(weight_decay))
             else:
                 self.layers_c['merge{:d}'.format(block_idx)] = Add()
 
@@ -96,6 +98,8 @@ class UNet(tf.keras.Model):
 
         self.tensors = {}
 
+        if self.padding == 'reflect':
+            inputs = tf.pad(inputs, [[0,0],[1,1],[1,1],[0,0]], "REFLECT")
         outputs = self.init_conv(inputs)
         ##### encouding path ####
         for block_idx in range(self.nstage):
@@ -111,6 +115,8 @@ class UNet(tf.keras.Model):
                 if self.dropout_rate:
                     outputs = self.layers_c['dropout{:d}_{:d}'.format(block_idx, conv_idx)](outputs, training)
                 # conv layers
+                if self.padding == 'reflect':
+                    outputs = tf.pad(outputs, [[0,0],[1,1],[1,1],[0,0]], "REFLECT")
                 outputs = self.layers_c['conv{:d}_{:d}'.format(block_idx, conv_idx)](outputs)
             # residual addition
             if self.residual:
@@ -130,6 +136,8 @@ class UNet(tf.keras.Model):
             if self.dropout_rate :
                 outputs = self.layers_c['dropout{:d}_{:d}'.format(self.nstage, conv_idx)](outputs, training)
             # conv layers
+            if self.padding == 'reflect':
+                outputs = tf.pad(outputs, [[0,0],[1,1],[1,1],[0,0]], "REFLECT")
             outputs = self.layers_c['conv{:d}_{:d}'.format(self.nstage, conv_idx)](outputs)
 
         # decoding path
@@ -137,6 +145,8 @@ class UNet(tf.keras.Model):
             # upsampling
             if self.up_type == 'upConv':
                 outputs = self.layers_c['up{:d}'.format(block_idx)](outputs)
+                if self.padding == 'reflect':
+                    outputs = tf.pad(outputs, [[0,0],[1,1],[1,1],[0,0]], "REFLECT")
             if self.batch_norm:
                 outputs = self.layers_c['upBatchnorm{:d}'.format(block_idx)](outputs, training)
             outputs = self.layers_c['upRelu{:d}'.format(block_idx)](outputs)
@@ -160,6 +170,8 @@ class UNet(tf.keras.Model):
                 if self.dropout_rate:
                     outputs = self.layers_c['dropout{:d}_{:d}'.format(block_idx, conv_idx)](outputs, training)
                 # conv layers
+                if self.padding == 'reflect':
+                    outputs = tf.pad(outputs, [[0,0],[1,1],[1,1],[0,0]], "REFLECT")
                 outputs = self.layers_c['conv{:d}_{:d}'.format(block_idx, conv_idx)](outputs)
             if self.residual:
                 outputs = self.layers_c['residualAdd{:d}'.format(block_idx)]([outputs, inputs])
