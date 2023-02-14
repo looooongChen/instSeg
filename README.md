@@ -22,9 +22,9 @@ The British Machine Vision Conference (BMVC), London, UK, 2022
 ## Python dependencies:
 
 - tensorflow 2.x
+- tensorflow-addons
 - scikit-image
 - opencv
-- [tfAugmentor](https://github.com/looooongChen/tfAugmentor) (required only if image augmentation function is activated)
 - tqdm
 - numpy
 
