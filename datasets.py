@@ -1,6 +1,3 @@
-from bbbc010 import read_BBBC010
-from occ2014 import read_OCC
-from ccdb6843 import read_CCDB6843
 from skimage.measure import label as label_connected_component
 from skimage.measure import regionprops
 import os
@@ -313,6 +310,9 @@ class Datasets(object):
                     continue
 
                 k, f_type = f[:-4].split('_')
+                
+                if f_type == 'nucleus':
+                    continue
 
                 if keys is not None and k not in keys:
                     continue

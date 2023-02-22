@@ -10,13 +10,14 @@ def net_factory(x, config):
     assert net in supported_nets
 
     if net == 'unet':
-        backbone, y = unet(x, filters=config.filters,
-                           stages=config.nstage,
-                           convs=config.stage_conv,
-                           drop_rate=config.dropout_rate,
-                           normalization=config.net_normalization,
-                           up_scaling=config.up_scaling,
-                           concatenate=config.concatenate)
+        backbone, y, props = unet(x, filters=config.filters,
+                                  stages=config.nstage,
+                                  convs=config.stage_conv,
+                                  padding=config.padding,
+                                  drop_rate=config.dropout_rate,
+                                  normalization=config.net_normalization,
+                                  up_scaling=config.up_scaling,
+                                  concatenate=config.concatenate)
     if net.lower().startswith('resnet'):
         backbone, y = resnet(x,
                             filters=config.nstage,

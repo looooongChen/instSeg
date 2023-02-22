@@ -114,11 +114,20 @@ class ModelBase(object):
         # contour loss
         loss_fns['contour'] = loss_fns['foreground']
         # embedding loss
-        loss_fns['embedding'] = {'cos': lambda y_true, y_pred, adj_indicator: L.cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=self.config.embedding_include_bg),
-                                 'sparse_cos': lambda y_true, y_pred, adj_indicator: L.sparse_cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=self.config.embedding_include_bg)}
-        loss_fns['layered_embedding'] = {'cos': lambda y_true, y_pred, adj_indicator: L.cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=self.config.embedding_include_bg),
-                                         'sparse_cos': lambda y_true, y_pred, adj_indicator: L.sparse_cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=self.config.embedding_include_bg),
-                                         'overlap': lambda y_true, y_pred, adj_indicator:  L.overlap_embedding_loss(y_true, y_pred, adj_indicator, include_background=self.config.embedding_include_bg)}
+        cos_loss = lambda yt, yp, adj: L.cosine_embedding_loss(yt, yp, adj, 
+                                                               include_background=self.config.embedding_include_bg,
+                                                               dynamic_weighting=self.config.dynamic_weighting)
+        sparse_cos_loss = lambda yt, yp, adj: L.sparse_cosine_embedding_loss(yt, yp, adj, 
+                                                                             include_background=self.config.embedding_include_bg,
+                                                                             dynamic_weighting=self.config.dynamic_weighting)
+        loss_overlap = lambda yt, yp, adj:  L.overlap_embedding_loss(yt, yp, adj, 
+                                                                     include_background=self.config.embedding_include_bg,
+                                                                     dynamic_weighting=self.config.dynamic_weighting)                                                            
+        loss_fns['embedding'] = {'cos': cos_loss,
+                                 'sparse_cos': sparse_cos_loss}
+        loss_fns['layered_embedding'] = {'cos': cos_loss,
+                                         'sparse_cos': sparse_cos_loss,
+                                         'overlap': loss_overlap}
 
         self.loss_fns = {}
         for m in self.modules:
@@ -429,9 +438,9 @@ class ModelBase(object):
                     self.optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
                     # display trainig loss
                     self.training_step += 1
-                    disp = "Epoch {0:d}, Step {1:d} with loss: {2:.5f}".format(self.training_epoch+1, self.training_step, float(loss))
+                    disp = "Epoch {0:d}, Step {1:d} with loss: {2:.10f}".format(self.training_epoch+1, self.training_step, float(loss))
                     for m, l in module_losses.items():
-                        disp += ', ' + m + ' loss: {:.5f}'.format(float(l))
+                        disp += ', ' + m + ' loss: {:.10f}'.format(float(l))
                     print(disp)
                     # summary training loss
                     with self.train_summary_writer.as_default():
@@ -492,12 +501,17 @@ class ModelBase(object):
             if self.training_epoch >= self.config.validation_start_epoch and val_ds is not None:
                 self.validate(val_ds, save_best=True)
 
-    def predict_raw(self, image, training=False):
+    def predict_raw(self, image, training=False, keep_size=True):
         
         img = np.squeeze(image)
+        img_sz = img.shape[:2]
         img = image_resize_np([img], (self.config.H, self.config.W))
         img = K.cast_to_floatx(img)
         raw = self.model(img, training=training)
+        if keep_size:
+            raw = [tf.image.resize(m, img_sz) for m in raw]
+            # for i in range(len(raw)):
+            #     raw[i] = tf.image.resize(raw[i], img_sz)
         raw = {m: np.squeeze(o) for m, o in zip(self.modules, raw)}
 
         return raw

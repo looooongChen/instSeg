@@ -14,52 +14,75 @@ import pandas as pd
 # 5     #    31,108,480 / 124,390,144  #  237,152 / 941,248     #
 # 6     #   124,453,248 / 497,726,208  #  278,592 / 1,106,048   #
 
-sz = 1024
+# receptive field and crop
+# stage #    unet       #  cunet  #
+# 1     #   18   9/8    #       #
+# 2     #   44  22/20   #      #
+# 3     #   96  48/44   #    #
+# 4     #  200 100/92   #     #
+# 5     #  408 204/188  #    #
+# 6     #  824 412/380  #    #
 
-def count_parameters(model):
-    trainableParams = np.sum([np.prod(v.get_shape()) for v in model.trainable_weights])
-    nonTrainableParams = np.sum([np.prod(v.get_shape()) for v in model.non_trainable_weights])
-    return trainableParams, nonTrainableParams
+#### rp and crop ####
 
-pa_summary = pd.DataFrame(columns=['depth(stage)', 'U-Net32', 'cU-Net32', 'U-Net64', 'cU-Net64'])
-rp_summary = pd.DataFrame(columns=['depth(stage)', 'U-Net32', 'cU-Net32', 'U-Net64', 'cU-Net64'])
 
-for stage in [3,4,5,6]:
-    parameters, rps = [stage], [stage]
-    for filters in [32, 64]: 
+sz = 512
+input_img = tf.keras.layers.Input((sz,sz,1), name='input_img')
+model, fts, props = instSeg.nets.unet(input_img, convs=2, stages=5, filters=32, up_scaling='deConv', padding='same', concatenate=False)
+# model, fts, props = instSeg.nets.cunet(input_img, convs=2, stages=4, filters=32, up_scaling='deConv', padding='valid', concatenate=True, residual=True)
+
+model.summary()
+
+print(props)
+print(input_img.shape, fts.shape)
+
+
+# sz = 1024
+
+# def count_parameters(model):
+#     trainableParams = np.sum([np.prod(v.get_shape()) for v in model.trainable_weights])
+#     nonTrainableParams = np.sum([np.prod(v.get_shape()) for v in model.non_trainable_weights])
+#     return trainableParams, nonTrainableParams
+
+# pa_summary = pd.DataFrame(columns=['depth(stage)', 'U-Net32', 'cU-Net32', 'U-Net64', 'cU-Net64'])
+# rp_summary = pd.DataFrame(columns=['depth(stage)', 'U-Net32', 'cU-Net32', 'U-Net64', 'cU-Net64'])
+
+# for stage in [3,4,5,6]:
+#     parameters, rps = [stage], [stage]
+#     for filters in [32, 64]: 
         
-        input_img = tf.keras.layers.Input((sz,sz,1), name='input_img')
-        model, fts = instSeg.nets.unet(input_img, filters=filters,
-                                        stages=stage,
-                                        convs=2,
-                                        drop_rate=0,
-                                        normalization='batch',
-                                        up_scaling='upConv',
-                                        concatenate=True)
-        params, _ = count_parameters(model)
-        parameters.append(params)
-        rp, grad = instSeg.analyzer.rp(model, pt=(sz//2, sz//2), input_sz=(1,sz,sz,1), default_set=True)
-        rps.append(rp)
+#         input_img = tf.keras.layers.Input((sz,sz,1), name='input_img')
+#         model, fts = instSeg.nets.unet(input_img, filters=filters,
+#                                         stages=stage,
+#                                         convs=2,
+#                                         drop_rate=0,
+#                                         normalization='batch',
+#                                         up_scaling='upConv',
+#                                         concatenate=True)
+#         params, _ = count_parameters(model)
+#         parameters.append(params)
+#         rp, grad = instSeg.model_analyzer.rp(model, pt=(sz//2, sz//2), input_sz=(1,sz,sz,1), default_set=True)
+#         rps.append(rp)
 
-        input_img = tf.keras.layers.Input((sz,sz,1), name='input_img')
-        model, fts = instSeg.nets.cunet(input_img, filters=filters,
-                                        stages=stage,
-                                        convs=2,
-                                        residual=True,
-                                        drop_rate=0,
-                                        normalization='batch',
-                                        up_scaling='up')
-        params, _ = count_parameters(model)
-        parameters.append(params)
-        rp, grad = instSeg.analyzer.rp(model, pt=(sz//2, sz//2), input_sz=(1,sz,sz,1))
-        rps.append(rp)
+#         input_img = tf.keras.layers.Input((sz,sz,1), name='input_img')
+#         model, fts = instSeg.nets.cunet(input_img, filters=filters,
+#                                         stages=stage,
+#                                         convs=2,
+#                                         residual=True,
+#                                         drop_rate=0,
+#                                         normalization='batch',
+#                                         up_scaling='up')
+#         params, _ = count_parameters(model)
+#         parameters.append(params)
+#         rp, grad = instSeg.model_analyzer.rp(model, pt=(sz//2, sz//2), input_sz=(1,sz,sz,1))
+#         rps.append(rp)
 
-    pa_summary.loc[len(pa_summary)] = parameters
-    rp_summary.loc[len(rp_summary)] = rps
+#     pa_summary.loc[len(pa_summary)] = parameters
+#     rp_summary.loc[len(rp_summary)] = rps
 
-# print(pa_summary)
-pa_summary.to_csv('./parameters.csv')
-rp_summary.to_csv('./receptive field.csv')
+# # print(pa_summary)
+# pa_summary.to_csv('./parameters.csv')
+# rp_summary.to_csv('./receptive field.csv')
 
 # Unet
 # stage # deConv # upConv #

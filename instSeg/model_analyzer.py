@@ -3,11 +3,14 @@ import tensorflow as tf
 import numpy as np
 from skimage.measure import regionprops
 
-def rp(model, pt, input_sz=(1,512,512,1), default_set=False):
+def rp(model, pt=None, input_sz=(1,512,512,1), default_set=False):
 
     inputs = model.input
     outputs = model(inputs)
     model = tf.keras.Model(inputs=inputs, outputs=outputs)
+    
+    input_img = tf.ones(input_sz)
+    output = model(input_img)
 
     if default_set:
         for module in model.layers:
@@ -29,7 +32,6 @@ def rp(model, pt, input_sz=(1,512,512,1), default_set=False):
                 bn_weights = [module.get_weights()[0], module.get_weights()[1], np.full(module.get_weights()[2].shape, 0.0), np.full(module.get_weights()[3].shape, 1.0),]
                 module.set_weights(bn_weights)
 
-    input_img = tf.ones(input_sz)
     # input_img = tf.convert_to_tensor(inputs)
 
     with tf.GradientTape() as tf_gradient_tape:
@@ -37,6 +39,7 @@ def rp(model, pt, input_sz=(1,512,512,1), default_set=False):
         
         output = model(input_img)
         mask = np.copy(output) * 0
+        pt = [mask.shape[0]//2, mask.shape[1]//2] if pt is None else pt
         mask[0, pt[0], pt[1], :] = 1
         
         pseudo_loss = tf.reduce_mean(mask * output)

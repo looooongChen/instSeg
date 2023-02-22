@@ -279,24 +279,7 @@ def map2stack(y_true):
         y_true = tf.stack(tf.unstack(y_true, axis=-1)[1:], axis=-1)
     return y_true
 
-
-def cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=False):
-
-    '''
-    Args:
-        adj_indicator: bool matrix, representing the adjacent relationship, B x InstNum x InstNum
-        y_true: label map of size B x H x W x 1 or stack of masks B x H x W x N 
-        y_pred: pixel embedding of size B x H x W x C
-    '''
-
-    y_true = stack2map(y_true)
-    y_true = tf.squeeze(y_true, axis=-1)
-
-    y_pred = tf.math.l2_normalize(y_pred, axis=-1)
-    adj_indicator = tf.cast(adj_indicator, tf.int32)
-
-    def _loss(x):
-        label, adj, pred = x[0], x[1], x[2]
+def cosine_contrastive(label, adj, pred, include_background=False):
         # flatten the tensors
         label_flat = tf.reshape(label, [-1])
         pred_flat = tf.reshape(pred, [-1, tf.shape(pred)[-1]])
@@ -317,6 +300,7 @@ def cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=Fals
         segmented_sum = tf.math.unsorted_segment_sum(pred_flat, unique_id, instance_num)
         counts = tf.cast(tf.stop_gradient(counts), segmented_sum.dtype)
         mu = tf.nn.l2_normalize(segmented_sum/counts, axis=1)
+        # mu = segmented_sum
         # compute adjacent matrix is too slow, pre-computer before training starts
         # inter_mask = (1 - tf.eye(max_obj, dtype=tf.int32)) * tf.cast(adj, tf.int32)
         inter_mask = tf.linalg.set_diag(adj, tf.zeros((tf.shape(adj)[0]), dtype=adj.dtype))
@@ -327,9 +311,10 @@ def cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=Fals
         ##########################
         
         mu_expand = tf.gather(mu, unique_id)
-        loss_inner = tf.reduce_sum(mu_expand * pred_flat, axis=-1) ** 2
+        # loss_inner = 1 - tf.abs(tf.reduce_sum(mu_expand * pred_flat, axis=-1))
+        loss_inner = 1 - tf.reduce_sum(mu_expand * pred_flat, axis=-1)
         # loss_inner = tf.norm(mu_expand - pred_flat, ord=2, axis=-1)
-        loss_inner = 1 - tf.reduce_mean(loss_inner)
+        loss_inner = tf.reduce_mean(loss_inner)
 
         ##########################
         #### inter class loss ####
@@ -339,21 +324,47 @@ def cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=Fals
         mu_interleave = tf.tile(mu, [instance_num, 1])
         mu_rep = tf.reshape(tf.tile(mu, [1, instance_num]), (instance_num*instance_num, -1))
         loss_inter = tf.reduce_sum(mu_interleave * mu_rep, axis=-1) ** 2
+        # loss_inter = tf.abs(tf.reduce_sum(mu_interleave * mu_rep, axis=-1))
         # apply inter loss mask
         inter_mask = tf.gather(inter_mask, unique_labels, axis=0)
         inter_mask = tf.gather(inter_mask, unique_labels, axis=1)
         inter_mask = tf.cast(tf.reshape(inter_mask, [-1]), loss_inter.dtype)
         loss_inter = tf.reduce_sum(loss_inter*inter_mask)/(tf.reduce_sum(inter_mask)+K.epsilon())
 
-        return 0, 0, loss_inner + loss_inter
-        # return 0, 0, loss_inter
+        return loss_inner, loss_inter
+
+def cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=False, dynamic_weighting=True):
+
+    '''
+    Args:
+        adj_indicator: bool matrix, representing the adjacent relationship, B x InstNum x InstNum
+        y_true: label map of size B x H x W x 1 or stack of masks B x H x W x N 
+        y_pred: pixel embedding of size B x H x W x C
+    '''
+
+    y_true = stack2map(y_true)
+    y_true = tf.squeeze(y_true, axis=-1)
+
+    y_pred = tf.math.l2_normalize(y_pred, axis=-1)
+    adj_indicator = tf.cast(adj_indicator, tf.int32)
+
+    def _loss(x):
+        label, adj, pred = x[0], x[1], x[2]
+        loss_inner, loss_inter = cosine_contrastive(label, adj, pred, include_background)
+        if dynamic_weighting:
+            w = loss_inter/(loss_inner + 1e-7)
+            w = tf.cast(tf.stop_gradient(w), loss_inter.dtype)
+            return 0, 0, (loss_inner + w * loss_inter)/(1+w)
+            # return 0, 0, loss_inner + loss_inter
+        else:
+            return 0, 0, loss_inner + loss_inter
 
     losses = tf.map_fn(_loss, (y_true, adj_indicator, y_pred))[2]
     losses = tf.reduce_mean(losses) 
 
     return losses
 
-def sparse_cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=False):
+def sparse_cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=False, dynamic_weighting=True):
     losses = cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=include_background)
     y_true = stack2map(y_true)
     y_pred = tf.math.l2_normalize(y_pred, axis=-1) ** 2

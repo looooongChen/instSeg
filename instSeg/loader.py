@@ -9,9 +9,13 @@ import tensorflow as tf
 def load_model(model_dir, load_best=True, aug_dropout=0):
     tf.keras.backend.clear_session()
     config_file = os.path.join(model_dir, 'config.pkl')
+
     if os.path.exists(config_file):
         with open(config_file, 'rb') as input:
             config = pickle.load(input)
+            # compatible
+            if config.up_scaling == 'upConv':
+                config.up_scaling = 'bilinear'
             if config.dropout_rate == 0 and aug_dropout > 0:
                 config.dropout_rate = aug_dropout
             for k, v in Config().__dict__.items():

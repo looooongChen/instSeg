@@ -14,8 +14,10 @@ from instSeg import synthesis
 from instSeg import utils 
 from instSeg import visualization as vis
 
-from instSeg.pattern_generator import Config as Generator_Config
-from instSeg.pattern_generator import Generator as Pattern_Generator
+from instSeg.pattern_generator import Config as GeneratorConfig
+from instSeg.pattern_generator import GridGenerator as GridGenerator
 
 import instSeg.result_analyse as result_analyse
 import instSeg.model_analyzer as model_analyzer
+
+import instSeg.nets as nets

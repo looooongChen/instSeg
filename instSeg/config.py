@@ -17,6 +17,7 @@ class Config(object):
         self.W = 512
         self.image_channel = image_channel
         # image normalization
+        self.positional_padding = None
         self.input_normalization = 'per-image' # 'per-image', 'constant', None
         self.input_normalization_bias = 0
         self.input_normalization_scale = 1
@@ -24,10 +25,11 @@ class Config(object):
         # backbone config
         self.backbone = 'uNet' # 'uNet', 'ResNet50', 'ResNet101', 'ResNet152', 'EfficientNetB0' - 'EfficientNetB7'
         self.filters = 64
+        self.padding = 'same'
         self.weight_decay = 1e-5
         self.net_normalization = 'batch' # 'batch', None
         self.dropout_rate = 0
-        self.up_scaling = 'upConv' # 'upConv', 'deConv'
+        self.up_scaling = 'deConv' # 'deConv', 'bilinear', 'nearest'
         self.concatenate = True
         ## config for specific to unet
         self.nstage = 4
@@ -68,7 +70,8 @@ class Config(object):
         
         ## embedding loss
         self.embedding_dim = 8
-        self.embedding_include_bg = True
+        self.embedding_include_bg = False
+        self.dynamic_weighting = True
         self.neighbor_distance = 10
         # self.positional_embedding = None # 'global', 'harmonic'
         # self.octave = 4

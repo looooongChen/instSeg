@@ -10,7 +10,7 @@ parser.add_argument("command",
                     metavar="<command>",
                     help="'train_sparse_embedding', 'tune_overlap', 'train_embedding', 'tune_sparse'")
 
-parser.add_argument('--model_dir', default='./models_bbbc010/model_test', help='model_dir')
+parser.add_argument('--model_dir', default='/work/scratch/chen/models/models_release/model_Celegans_unetL', help='model_dir')
 parser.add_argument('--steps', default=100000, help='training epoches')
 parser.add_argument('--ds', default='Celegans', help='experiment dataset')
 parser.add_argument('--backbone', default='unet', help='')
@@ -105,7 +105,7 @@ if args.command.startswith('train'):
         config.lr_decay_period = 10000
         config.backbone = args.backbone
         config.input_normalization = 'per-image'
-        config.up_scaling = 'upConv'
+        config.up_scaling = 'bilinear'
         config.net_normalization = 'batch'
         config.dropout_rate = 0
 
@@ -120,13 +120,13 @@ if args.command.startswith('train'):
 if args.command.startswith('tune'):
     model = instSeg.load_model(model_dir=args.model_dir, load_best=True)
     model.config.validation_start_epoch = 1
-    if args.command == 'tune_sparse': 
-        suffix = "_sparseTuned" 
-        model.config.loss['layered_embedding'] = 'sparse_cos' 
-    if args.command == 'tune_overlap': 
-        suffix = "_overlapTuned" 
-        model.config.loss['layered_embedding'] = 'overlap' 
-        model.config.save_best_metric = 'AP'
+    # if args.command == 'tune_sparse': 
+    #     suffix = "_sparseTuned" 
+    #     model.config.loss['layered_embedding'] = 'sparse_cos' 
+    # if args.command == 'tune_overlap': 
+    suffix = "_overlapTuned" 
+    model.config.loss['layered_embedding'] = 'overlap' 
+    model.config.save_best_metric = 'AP'
     if not args.model_dir.endswith(suffix):
         model.save_as(os.path.join(os.path.dirname(args.model_dir), os.path.basename(args.model_dir)+suffix))
         model.config.train_learning_rate = model.lr()
@@ -144,6 +144,9 @@ if args.command == 'detect':
         shutil.rmtree(result_dir)
     for k, img in imgs_test.items():
         print(k)
+        if args.ds == 'Neuroblastoma':
+            img = cv2.resize(img, (img.shape[1]//2, img.shape[0]//2))
+            imgs_test[k] = img
         raw = model.predict_raw(img)
         embedding = raw['layered_embedding'] if 'layered_embedding' in raw.keys() else raw['embedding']
         embedding = np.squeeze(embedding)
@@ -151,11 +154,11 @@ if args.command == 'detect':
         # save vis of layering
         save_dir = os.path.join(result_dir, k)
         os.makedirs(save_dir)
-        vis = instSeg.vis.vis_instance_contour(imgs_test[k], np.array(instances))
         # prediction visualization
+        vis = instSeg.vis.vis_instance_contour(imgs_test[k], np.array(instances))
         cv2.imwrite(os.path.join(save_dir, 'pred.png'), vis)
-        vis = instSeg.vis.vis_instance_contour(imgs_test[k], np.array(masks_test[k]))
         # ground truth visualization
+        vis = instSeg.vis.vis_instance_contour(imgs_test[k], np.array(masks_test[k]))
         cv2.imwrite(os.path.join(save_dir, 'gt.png'), vis)
         # foreground
         fg = np.squeeze(raw['foreground']) > 0.5 
@@ -192,15 +195,18 @@ if args.command == 'detect':
         # raw layering visualization
 
 if args.command == 'evaluate':
+    import cv2
 
     thres = [0.5, 0.6, 0.7, 0.8, 0.9]
 
     e = instSeg.Evaluator(dimension=2, mode='area', verbose=True)
     model = instSeg.load_model(model_dir=args.model_dir, load_best=True)
-    for k, img in imgs.items():
+    for k, img in imgs_test.items():
+        if args.ds == 'Neuroblastoma':
+            img = cv2.resize(img, (img.shape[1]//2, img.shape[0]//2))
         raw = model.predict_raw(img)
         instances, layered = model.postprocess(raw, post_processing='layered_embedding')
-        e.add_example(instances, masks[k])
+        e.add_example(instances, masks_test[k])
     print("Evaluation of ", args.model_dir.lower(), 'on data set', args.ds.lower(), ': ')
     e.AP_DSB(thres=thres)
     e.AJI()
