@@ -28,13 +28,13 @@ import pandas as pd
 
 sz = 512
 input_img = tf.keras.layers.Input((sz,sz,1), name='input_img')
-model, fts, props = instSeg.nets.unet(input_img, convs=2, stages=5, filters=32, up_scaling='deConv', padding='same', concatenate=False)
+model, fts, props = instSeg.nets.unet(input_img, convs=2, stages=5, filters=16, up_scaling='deConv', padding='same', concatenate=True)
 # model, fts, props = instSeg.nets.cunet(input_img, convs=2, stages=4, filters=32, up_scaling='deConv', padding='valid', concatenate=True, residual=True)
 
 model.summary()
 
-print(props)
-print(input_img.shape, fts.shape)
+# print(props)
+# print(input_img.shape, fts.shape)
 
 
 # sz = 1024

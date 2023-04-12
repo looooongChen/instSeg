@@ -773,7 +773,11 @@ class Evaluator(object):
             match_count_pd += match_count[1]
             num_pd += e.num_pd
             num_gt += e.num_gt
+            # print('===================')
+            # print(match_count[0], match_count[1], e.num_pd, e.num_gt)
+            # print(match_count_gt, match_count_pd, num_pd, num_gt)
         union = num_gt + num_pd - match_count_pd
+        # print('union', union)
         # it is possible that gt, pred are both empty
         P = match_count_gt/union if union > 0 else 1
         if self.verbose:

@@ -1,8 +1,10 @@
 import tensorflow as tf 
+from keras import backend as K
 from instSeg.model_base import ModelBase, input_process, module_output
 from instSeg.enumDef import *
 from instSeg.net_factory import net_factory
 from instSeg.nets.blocks2d import block_conv2D
+from instSeg.nets import CoorPad
 import os
 
 
@@ -15,6 +17,9 @@ class Model(ModelBase):
     def build_model(self):
         self.input_img = tf.keras.layers.Input((self.config.H, self.config.W, self.config.image_channel), name='input_img')
         x = input_process(self.input_img, self.config)
+
+        if self.config.guide_function_type is not None and self.config.guide_function_period is not None:
+            x = CoorPad(self.config.guide_function_type, self.config.guide_function_period, stride=1)(x)
 
         self.backbone, self.features = net_factory(x, self.config)
 

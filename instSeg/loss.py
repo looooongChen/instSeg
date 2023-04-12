@@ -279,61 +279,85 @@ def map2stack(y_true):
         y_true = tf.stack(tf.unstack(y_true, axis=-1)[1:], axis=-1)
     return y_true
 
-def cosine_contrastive(label, adj, pred, include_background=False):
-        # flatten the tensors
-        label_flat = tf.reshape(label, [-1])
-        pred_flat = tf.reshape(pred, [-1, tf.shape(pred)[-1]])
+def instance_contrastive(label, adj, pred, include_background=False, mode='cosine', margin_attr=0, margin_rep=0):
 
-        # if not include background, mask out background pixels
-        if not include_background:
-            ind = tf.greater(label_flat, 0)
-            label_flat = tf.boolean_mask(label_flat, ind)
-            pred_flat = tf.boolean_mask(pred_flat, ind)
+    '''
+    pred should be normalized before input, if mode == 'cosine'
+    '''
+    
+    # flatten the tensors
+    label_flat = tf.reshape(label, [-1])
+    pred_flat = tf.reshape(pred, [-1, tf.shape(pred)[-1]])
+
+    # if not include background, mask out background pixels
+    if not include_background:
+        ind = tf.greater(label_flat, 0)
+        label_flat = tf.boolean_mask(label_flat, ind)
+        pred_flat = tf.boolean_mask(pred_flat, ind)
+
+    if tf.equal(tf.size(label_flat), 0):
+        return 0, 0
 
 
-        # grouping labels
-        unique_labels, unique_id, counts = tf.unique_with_counts(label_flat)
-        counts = tf.reshape(K.cast_to_floatx(counts), (-1, 1))
-        instance_num = tf.size(unique_labels, out_type=tf.int32)
-        # label_num = instance_num if include_background else instance_num + 1
-        # compute mean embedding of each instance
-        segmented_sum = tf.math.unsorted_segment_sum(pred_flat, unique_id, instance_num)
-        counts = tf.cast(tf.stop_gradient(counts), segmented_sum.dtype)
-        mu = tf.nn.l2_normalize(segmented_sum/counts, axis=1)
-        # mu = segmented_sum
-        # compute adjacent matrix is too slow, pre-computer before training starts
-        # inter_mask = (1 - tf.eye(max_obj, dtype=tf.int32)) * tf.cast(adj, tf.int32)
-        inter_mask = tf.linalg.set_diag(adj, tf.zeros((tf.shape(adj)[0]), dtype=adj.dtype))
-        inter_mask = tf.cast(inter_mask, tf.int32)
+    # grouping labels
+    unique_labels, unique_id, counts = tf.unique_with_counts(label_flat)
+    counts = tf.reshape(K.cast_to_floatx(counts), (-1, 1))
+    instance_num = tf.size(unique_labels, out_type=tf.int32)
+    # label_num = instance_num if include_background else instance_num + 1
+    # compute mean embedding of each instance
+    segmented_sum = tf.math.unsorted_segment_sum(pred_flat, unique_id, instance_num)
+    counts = tf.cast(tf.stop_gradient(counts), segmented_sum.dtype)
+    mu = segmented_sum/counts
+    if mode == 'cosine':
+        mu = tf.nn.l2_normalize(mu, axis=1)
+    # mu = segmented_sum
+    # compute adjacent matrix is too slow, pre-computer before training starts
+    # inter_mask = (1 - tf.eye(max_obj, dtype=tf.int32)) * tf.cast(adj, tf.int32)
+    inter_mask = tf.linalg.set_diag(adj, tf.zeros((tf.shape(adj)[0]), dtype=adj.dtype))
+    inter_mask = tf.cast(inter_mask, tf.int32)
 
-        ##########################
-        #### inner class loss ####
-        ##########################
-        
-        mu_expand = tf.gather(mu, unique_id)
-        # loss_inner = 1 - tf.abs(tf.reduce_sum(mu_expand * pred_flat, axis=-1))
-        loss_inner = 1 - tf.reduce_sum(mu_expand * pred_flat, axis=-1)
-        # loss_inner = tf.norm(mu_expand - pred_flat, ord=2, axis=-1)
-        loss_inner = tf.reduce_mean(loss_inner)
+    ##########################
+    #### inner class loss ####
+    ##########################
+    mu_expand = tf.gather(mu, unique_id)
+    # loss_attr = 1 - tf.abs(tf.reduce_sum(mu_expand * pred_flat, axis=-1))
+    if mode == 'cosine':
+        loss_attr = 1 - tf.reduce_sum(mu_expand * pred_flat, axis=-1)
+    elif mode == 'euclidean':
+        loss_attr = tf.sqrt(tf.reduce_sum((mu_expand - pred_flat) ** 2, axis=-1))
+    if margin_attr != 0:
+        loss_attr = tf.math.maximum(loss_attr - margin_attr, 0)
+    loss_attr = loss_attr * tf.squeeze(1 / (tf.gather(counts, unique_id) + 1e-12))
+    loss_attr = tf.math.unsorted_segment_sum(loss_attr, unique_id, instance_num)
+    loss_attr = tf.reduce_mean(loss_attr) 
+    # weights = weights / (tf.reduce_sum(weights) + 1e-12)
+    # loss_attr = tf.reduce_sum(loss_attr*weights)
 
-        ##########################
-        #### inter class loss ####
-        ##########################
+    ##########################
+    #### inter class loss ####
+    ##########################
 
-        # get inter loss for each pair
-        mu_interleave = tf.tile(mu, [instance_num, 1])
-        mu_rep = tf.reshape(tf.tile(mu, [1, instance_num]), (instance_num*instance_num, -1))
-        loss_inter = tf.reduce_sum(mu_interleave * mu_rep, axis=-1) ** 2
-        # loss_inter = tf.abs(tf.reduce_sum(mu_interleave * mu_rep, axis=-1))
-        # apply inter loss mask
-        inter_mask = tf.gather(inter_mask, unique_labels, axis=0)
-        inter_mask = tf.gather(inter_mask, unique_labels, axis=1)
-        inter_mask = tf.cast(tf.reshape(inter_mask, [-1]), loss_inter.dtype)
-        loss_inter = tf.reduce_sum(loss_inter*inter_mask)/(tf.reduce_sum(inter_mask)+K.epsilon())
+    # get inter loss for each pair
+    mu_interleave = tf.tile(mu, [instance_num, 1])
+    mu_rep = tf.reshape(tf.tile(mu, [1, instance_num]), (instance_num*instance_num, -1))
+    if mode == 'cosine':
+        loss_rep = tf.reduce_sum(mu_interleave * mu_rep, axis=-1) ** 2
+    elif mode == 'euclidean':
+        margin_rep = -margin_rep if margin_rep > 0 else margin_rep
+        loss_rep = - tf.sqrt(tf.reduce_sum((mu_interleave - mu_rep) ** 2, axis=-1))
+    if margin_rep != 0:
+        loss_rep = tf.math.maximum(loss_rep - margin_rep, 0)
+    # loss_rep = tf.abs(tf.reduce_sum(mu_interleave * mu_rep, axis=-1))
+    # apply inter loss mask
+    inter_mask = tf.gather(inter_mask, unique_labels, axis=0)
+    inter_mask = tf.gather(inter_mask, unique_labels, axis=1)
+    inter_mask = tf.cast(tf.reshape(inter_mask, [-1]), loss_rep.dtype)
+    loss_rep = tf.reduce_sum(loss_rep*inter_mask)/(tf.reduce_sum(inter_mask)+K.epsilon())
 
-        return loss_inner, loss_inter
+    return loss_attr, loss_rep
 
-def cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=False, dynamic_weighting=True):
+
+def embedding_loss(y_true, y_pred, adj_indicator, config, mode='cosine'):
 
     '''
     Args:
@@ -345,60 +369,72 @@ def cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=Fals
     y_true = stack2map(y_true)
     y_true = tf.squeeze(y_true, axis=-1)
 
-    y_pred = tf.math.l2_normalize(y_pred, axis=-1)
+    if mode == 'cosine':
+        y_pred = tf.math.l2_normalize(y_pred, axis=-1)
     adj_indicator = tf.cast(adj_indicator, tf.int32)
 
     def _loss(x):
         label, adj, pred = x[0], x[1], x[2]
-        loss_inner, loss_inter = cosine_contrastive(label, adj, pred, include_background)
-        if dynamic_weighting:
-            w = loss_inter/(loss_inner + 1e-7)
-            w = tf.cast(tf.stop_gradient(w), loss_inter.dtype)
-            return 0, 0, (loss_inner + w * loss_inter)/(1+w)
-            # return 0, 0, loss_inner + loss_inter
+        loss_attr, loss_rep = instance_contrastive(label, adj, pred, config.embedding_include_bg, mode=mode, margin_attr=config.margin_attr, margin_rep=config.margin_rep)
+        if config.dynamic_weighting:
+            w = loss_rep/(loss_attr + 1e-7)
+            w = tf.cast(tf.stop_gradient(w), loss_rep.dtype)
+            return 0, 0, (loss_attr + w * loss_rep)/(1+w)
         else:
-            return 0, 0, loss_inner + loss_inter
+            return 0, 0, loss_attr + loss_rep
 
     losses = tf.map_fn(_loss, (y_true, adj_indicator, y_pred))[2]
     losses = tf.reduce_mean(losses) 
 
+    if config.embedding_regularization > 0:
+        if mode == 'cosine':
+            reg = 1 - tf.reduce_max(y_pred, axis=-1)
+        elif mode == 'euclidean':
+            reg = tf.sqrt(tf.reduce_sum(y_pred ** 2, axis=-1))
+        if not config.embedding_include_bg:
+            ind = tf.greater(y_true, 0)
+            reg = tf.boolean_mask(reg, ind)
+        loss_reg = 0 if tf.equal(tf.size(reg), 0) else tf.reduce_mean(reg)
+        losses = losses + config.embedding_regularization * loss_reg
+
     return losses
 
-def sparse_cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=False, dynamic_weighting=True):
-    losses = cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=include_background)
-    y_true = stack2map(y_true)
-    y_pred = tf.math.l2_normalize(y_pred, axis=-1) ** 2
-    if not include_background:
-        loss_sparse = tf.reduce_mean((1 - tf.reduce_max(y_pred, axis=-1))*tf.cast(tf.squeeze(y_true, axis=-1)>0, y_pred.dtype))
-    else:
-        loss_sparse = tf.reduce_mean(1 - tf.reduce_max(y_pred, axis=-1))
-    losses = losses + 0.1 * loss_sparse
-    return losses
+
+# def sparse_cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=False, dynamic_weighting=True):
+#     losses = cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=include_background)
+#     y_true = stack2map(y_true)
+#     y_pred = tf.math.l2_normalize(y_pred, axis=-1) ** 2
+#     if not include_background:
+#         loss_sparse = tf.reduce_mean((1 - tf.reduce_max(y_pred, axis=-1))*tf.cast(tf.squeeze(y_true, axis=-1)>0, y_pred.dtype))
+#     else:
+#         loss_sparse = tf.reduce_mean(1 - tf.reduce_max(y_pred, axis=-1))
+#     losses = losses + 0.1 * loss_sparse
+#     return losses
 
 
-def overlap_embedding_loss(y_true, y_pred, adj_indicator, include_background=False):
-    '''
-    y_true: shape N x H x W x #obj***
-    y_pred: shape N x H x W x C
-    '''
-    loss = sparse_cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=include_background)
+# def overlap_embedding_loss(y_true, y_pred, adj_indicator, include_background=False):
+#     '''
+#     y_true: shape N x H x W x #obj***
+#     y_pred: shape N x H x W x C
+#     '''
+#     loss = sparse_cosine_embedding_loss(y_true, y_pred, adj_indicator, include_background=include_background)
     
-    y_true = tf.cast(y_true, tf.int32)
-    labeled_objs = stack2map(y_true)
+#     y_true = tf.cast(y_true, tf.int32)
+#     labeled_objs = stack2map(y_true)
 
-    def _get_layered(x):
-        embedding, mask, labeled = x[0], x[1], x[2]
-        embedding = tf.math.l2_normalize(embedding, axis=-1)
-        mask = map2stack(mask)
+#     def _get_layered(x):
+#         embedding, mask, labeled = x[0], x[1], x[2]
+#         embedding = tf.math.l2_normalize(embedding, axis=-1)
+#         mask = map2stack(mask)
 
-        mu = tf.math.unsorted_segment_mean(embedding, tf.squeeze(labeled, axis=-1), num_segments=tf.shape(mask)[-1]+1)
-        layer_idx = tf.argmax(mu, axis=1)
-        mask_trim = tf.pad(tf.transpose(mask, perm=[2,0,1]), paddings=tf.constant([[1,0],[0,0],[0,0]]), mode='CONSTANT', constant_values=0)
-        layered = tf.math.unsorted_segment_mean(mask_trim, layer_idx, num_segments=tf.shape(embedding)[-1]) > 0
-        layered = tf.cast(tf.transpose(layered, perm=[1,2,0]), labeled.dtype)
-        return 0, 0, layered
+#         mu = tf.math.unsorted_segment_mean(embedding, tf.squeeze(labeled, axis=-1), num_segments=tf.shape(mask)[-1]+1)
+#         layer_idx = tf.argmax(mu, axis=1)
+#         mask_trim = tf.pad(tf.transpose(mask, perm=[2,0,1]), paddings=tf.constant([[1,0],[0,0],[0,0]]), mode='CONSTANT', constant_values=0)
+#         layered = tf.math.unsorted_segment_mean(mask_trim, layer_idx, num_segments=tf.shape(embedding)[-1]) > 0
+#         layered = tf.cast(tf.transpose(layered, perm=[1,2,0]), labeled.dtype)
+#         return 0, 0, layered
     
-    layered_objs = tf.map_fn(_get_layered, (y_pred, y_true, labeled_objs))[2]
+#     layered_objs = tf.map_fn(_get_layered, (y_pred, y_true, labeled_objs))[2]
 
     # overlap = tf.reduce_sum(tf.cast(y_true > 0, tf.int32), axis=-1) > 1
     # if tf.math.reduce_any(overlap):

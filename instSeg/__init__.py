@@ -21,3 +21,4 @@ import instSeg.result_analyse as result_analyse
 import instSeg.model_analyzer as model_analyzer
 
 import instSeg.nets as nets
+import instSeg.utils as utils

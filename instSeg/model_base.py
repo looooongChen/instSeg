@@ -16,6 +16,8 @@ from collections.abc import Iterable
 from keras.layers import Conv2D
 import os
 import cv2
+import shutil
+import time
 
 def input_process(x, config):
     if config.input_normalization == 'per-image':
@@ -23,13 +25,11 @@ def input_process(x, config):
     elif config.input_normalization == 'constant':
         x = (x - config.input_normalization_bias)/config.input_normalization_scale
 
-    # if self.config.positional_embedding is True:
-    #     self.normalized_img = PosConv(filters=self.config.filters)(self.normalized_img)
     return x
 
 def module_output(x, module, config):
-    if module == 'semantic':
-        outlayer = Conv2D(filters=config.classes, kernel_size=1, activation='softmax')
+    # if module == 'semantic':
+    #     outlayer = Conv2D(filters=config.classes, kernel_size=1, activation='softmax')
     if module == 'contour' or module == 'foreground':
         outlayer = Conv2D(filters=1, kernel_size=1, activation='sigmoid')
     if module == 'edt':
@@ -37,9 +37,10 @@ def module_output(x, module, config):
     if module == 'flow':
         outlayer = Conv2D(filters=2, kernel_size=1, activation='linear')
     if module == 'embedding':
-        outlayer = Conv2D(filters=config.embedding_dim, kernel_size=1, activation='linear')
-    if module == 'layered_embedding':
-        outlayer = Conv2D(filters=config.embedding_dim, kernel_size=1, activation='sigmoid')
+        activation = 'linear'
+        if config.embedding_activation.lower() == 'sigmoid':
+            activation = 'sigmoid'
+        outlayer = Conv2D(filters=config.embedding_dim, kernel_size=1, activation=activation)
     
     return outlayer(x)
 
@@ -60,6 +61,8 @@ class ModelBase(object):
         # validation
         self.modules = config.modules
         self.best_score = None
+        self.best_score_step = None
+        self.best_score_epoch = None
         self.build_model()
 
     def save_as(self, model_dir):
@@ -87,47 +90,42 @@ class ModelBase(object):
         self.model = None
 
     def lr(self):
-        p = self.training_step // self.config.lr_decay_period
-        return self.config.train_learning_rate * (self.config.lr_decay_rate ** p)
+        if self.config.lr_decay_period != 0:
+            p = self.training_step // self.config.lr_decay_period
+            return self.config.learning_rate * (self.config.lr_decay_rate ** p)
+        else:
+            return self.config.learning_rate
     
     def prepare_training(self):
 
         ''' prepare loss functions and optimizer'''
 
-        if self.config.lr_decay_period != 0:
-            # self.optimizer = keras.optimizers.Adam(learning_rate=lambda : self.lr())
+        # if self.config.lr_decay_period != 0:
+        if self.config.optimizer.lower() == 'adam':
+            self.optimizer = keras.optimizers.Adam(learning_rate=lambda : self.lr())
+        if self.config.optimizer.lower().startswith('rms'):
             self.optimizer = keras.optimizers.RMSprop(learning_rate=lambda : self.lr())
-        else:
-            # self.optimizer = keras.optimizers.Adam(lr=self.config.train_learning_rate)
-            self.optimizer = keras.optimizers.RMSprop(lr=self.config.train_learning_rate)
+        # else:
+        #     if self.config.optimizer.lower() == 'adam':
+        #         self.optimizer = keras.optimizers.Adam(lr=self.config.learning_rate)
+        #     self.optimizer = keras.optimizers.RMSprop(lr=self.config.learning_rate)
 
         loss_fns = {}
         # foreground loss
-        loss_fns['foreground'] = {'crossentropy': L.bce, 
-                                  'crossentropy_random': lambda y_true, y_pred: L.bce_random(y_true, y_pred, N=self.config.ce_neg_ratio),
-                                  'crossentropy_hard': lambda y_true, y_pred: L.bce_hard(y_true, y_pred, N=self.config.ce_neg_ratio),
-                                  'crossentropy_weighted': L.bce_weighted,
-                                  'dice': L.dice,
-                                  'focal_loss': lambda y_true, y_pred: L.bfl(y_true, y_pred, gamma=self.config.focal_loss_gamma)}
+        loss_fns['foreground'] = {'CE': L.bce, 
+                                  'randomCE': lambda y_true, y_pred: L.bce_random(y_true, y_pred, N=self.config.neg_ratio),
+                                  'hardCe': lambda y_true, y_pred: L.bce_hard(y_true, y_pred, N=self.config.neg_ratio),
+                                  'weightedCE': L.bce_weighted,
+                                  'Dice': L.dice,
+                                  'focalLoss': lambda y_true, y_pred: L.bfl(y_true, y_pred, gamma=self.config.focal_loss_gamma)}
         # edt regression loss
-        loss_fns['edt'] = {'mse': L.mse}
+        loss_fns['edt'] = {'MSE': L.mse}
         # contour loss
         loss_fns['contour'] = loss_fns['foreground']
         # embedding loss
-        cos_loss = lambda yt, yp, adj: L.cosine_embedding_loss(yt, yp, adj, 
-                                                               include_background=self.config.embedding_include_bg,
-                                                               dynamic_weighting=self.config.dynamic_weighting)
-        sparse_cos_loss = lambda yt, yp, adj: L.sparse_cosine_embedding_loss(yt, yp, adj, 
-                                                                             include_background=self.config.embedding_include_bg,
-                                                                             dynamic_weighting=self.config.dynamic_weighting)
-        loss_overlap = lambda yt, yp, adj:  L.overlap_embedding_loss(yt, yp, adj, 
-                                                                     include_background=self.config.embedding_include_bg,
-                                                                     dynamic_weighting=self.config.dynamic_weighting)                                                            
-        loss_fns['embedding'] = {'cos': cos_loss,
-                                 'sparse_cos': sparse_cos_loss}
-        loss_fns['layered_embedding'] = {'cos': cos_loss,
-                                         'sparse_cos': sparse_cos_loss,
-                                         'overlap': loss_overlap}
+        loss_fns['embedding'] = {'cosine': lambda yt, yp, adj: L.embedding_loss(yt, yp, adj, self.config, mode='cosine'),
+                                 'euclidean': lambda yt, yp, adj: L.embedding_loss(yt, yp, adj, self.config, mode='euclidean')}
+                                #  'overlap': loss_overlap}
 
         self.loss_fns = {}
         for m in self.modules:
@@ -157,29 +155,31 @@ class ModelBase(object):
             data['edt'] = trim_images(data['edt'], (self.config.H, self.config.W), interpolation='bilinear').astype(np.float32)
 
         # computer gt if not existing
-        for m in modules:
-            if m == 'foreground':
-                data_to_keep.append('foreground')
-                if 'foreground' not in data.keys():
-                    data['foreground'] = (np.sum(data['instance'], axis=-1, keepdims=True)>0).astype(np.uint8) 
+        if 'foreground' in modules:
+            data_to_keep.append('foreground')
+            if 'foreground' not in data.keys():
+                data['foreground'] = (np.sum(data['instance'], axis=-1, keepdims=True)>0).astype(np.uint8) 
 
-            if m == 'contour':
-                data_to_keep.append('contour')
-                if 'contour' not in data.keys():
-                    data['contour'] = (contour(data['instance'], mode=self.config.contour_mode, radius=self.config.contour_radius)> 0).astype(np.uint8)
+        if 'contour' in modules:
+            data_to_keep.append('contour')
+            if 'contour' not in data.keys():
+                data['contour'] = (contour(data['instance'], mode=self.config.contour_mode, radius=self.config.contour_radius)> 0).astype(np.uint8)
 
-            # keep edt in ram may cause error, if augmentation (for transformations that does not preserve distances, like elastic tranform) used
-            if m == 'edt': 
-                data_to_keep.append('edt')
-                if 'edt' not in data.keys():
-                    data['edt'] = edt(data['instance'], normalize=self.config.edt_normalize, process_disp=True).astype(np.float32)
-                    data['edt'] = data['edt'] * 10 if self.config.edt_normalize else data['edt']
+        # keep edt in ram may cause error, if augmentation (for transformations that does not preserve distances, like elastic tranform) used
+        # if 'edt' in modules: 
+        #     data_to_keep.append('edt')
+        #     if 'edt' not in data.keys():
+        #         data['edt'] = edt(data['instance'], normalize=self.config.edt_normalize, process_disp=True).astype(np.float32)
+        #         data['edt'] = data['edt'] * 10 if self.config.edt_normalize else data['edt']
 
-            if m in ['embedding', 'layered_embedding']:
-                keep_instance = True
-                data_to_keep.append('adj_matrix')
-                if 'adj_matrix' not in data.keys():
-                    data['adj_matrix'] = adj_matrix(data['instance'], self.config.neighbor_distance)
+        # if ignore_overlap:
+        #     data['instance'] = labeled_non_overlap(data['instance'])
+
+        if 'embedding' in modules:
+            keep_instance = True
+            data_to_keep.append('adj_matrix')
+            if 'adj_matrix' not in data.keys():
+                data['adj_matrix'] = adj_matrix(data['instance'], self.config.neighbor_distance)
 
         # delete unused data
         if keep_instance:
@@ -306,19 +306,33 @@ class ModelBase(object):
 
     def load_weights(self, load_best=False, weights_only=False):
 
-        if load_best:
-            if os.path.exists(self.weights_best):
-                weights_path = self.weights_best 
-            else:
-                print(" ==== Weights Best not found, Weights Latest loaded ==== ")
-                weights_path = self.weights_latest
+        cps = [f for f in os.listdir(self.model_dir) if f.startswith('best')]
+        cps.sort()
+        cp_best = cps[0] if len(cps) > 0 else None
+        cps = [f for f in os.listdir(self.model_dir) if f.startswith('latest')]
+        cps.sort()
+        cp_latest = cps[0] if len(cps) > 0 else None
+
+        # cp_best = tf.train.latest_checkpoint(self.weights_best)
+        # cp_latest = tf.train.latest_checkpoint(self.weights_latest)
+        if cp_best is None and cp_latest is None:
+            print("==== Model not found! ====")
         else:
-            weights_path = self.weights_latest
-        cp_file = tf.train.latest_checkpoint(weights_path)
-        
-        if cp_file is not None:
-            self.model.load_weights(cp_file)
-            parsed = os.path.basename(cp_file).split('_')
+            if load_best and cp_best is not None:
+                print("==== Weights Best loaded ====")
+                cp_file = cp_best
+            elif load_best and cp_latest is not None:
+                print("==== Weights Best not found, Weights Latest loaded ====")
+                cp_file = cp_latest
+            elif cp_latest is not None:
+                print("==== Weights Latest loaded ====")
+                cp_file = cp_latest
+            else:
+                print("==== Weights Latest not found, Use Weights Best to continue training ====")
+                cp_file = cp_best
+
+            self.model.load_weights(os.path.join(self.model_dir, cp_file))
+            parsed = os.path.basename(cp_file[:-3]).split('_')
             disp = 'Model restored from'
             for i in range(1, len(parsed)):
                 if parsed[i][:3] == 'epo':
@@ -327,35 +341,52 @@ class ModelBase(object):
                 if parsed[i][:3] == 'ste':
                     disp = disp + 'Step {:d}'.format(int(parsed[i][4:]))
                     self.training_step = int(parsed[i][4:]) if not weights_only else self.training_step
-                if not weights_only: 
-                    self.best_score = self.best_score
-                    cp_best = tf.train.latest_checkpoint(self.weights_best) 
-                    if cp_best is not None:
-                        parsed_best = os.path.basename(cp_best).split('_')
-                        for i in range(1, len(parsed_best)):
-                            if parsed_best[i][:3] == 'val':
-                                self.best_score = float(parsed_best[i][3:])
-                # print('current best score: ', self.best_score)
+            if not weights_only: 
+                self.best_score = self.best_score
+                cp_best = tf.train.latest_checkpoint(self.weights_best) 
+                if cp_best is not None:
+                    parsed_best = os.path.basename(cp_best).split('_')
+                    for i in range(1, len(parsed_best)):
+                        if parsed_best[i][:3] == 'val':
+                            self.best_score = float(parsed_best[i][3:])
+                        if parsed_best[i][:5] == 'epoch':
+                            self.best_score_epoch = int(parsed_best[i][5:])
+                        if parsed_best[i][:4] == 'step':
+                            self.best_score_step = int(parsed_best[i][4:])
             print(disp)
-        else:
-            print("==== Model not found! ====")
     
     def save_weights(self, model_type='latest'):
         
         # save_name = 'weights_stage' + str(self.training_stage+1) if stage_wise else 'weights'
-        save_name = 'weights' + '_epoch'+str(self.training_epoch)+'_step'+str(self.training_step)
+        save_name = '_epoch'+str(self.training_epoch)+'_step'+str(self.training_step)
         if model_type == 'latest':
-            save_dir = self.weights_latest
+            save_name = 'latest' + save_name
+            save_dir = self.model_dir
+            # save_dir = self.weights_latest
         elif model_type == 'best':
-            save_name = save_name + '_val'+'{:.5f}'.format(float(self.best_score))
-            save_dir = self.weights_best
+            save_name = 'best' + save_name + '_val'+'{:.5f}'.format(float(self.best_score))
+            save_dir = self.model_dir
+            # save_dir = self.weights_best
         elif model_type == 'snapshot':
-            save_dir = os.path.join(self.model_dir, 'weights_epoch'+str(self.training_epoch))
+            save_name = 'snapshot' + save_name
+            save_dir = os.path.join(self.model_dir, 'snapshots')
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
 
-        if os.path.exists(save_dir):
+        self.model.save_weights(os.path.join(save_dir, save_name+'.h5'), overwrite=True)
+        if os.path.exists(save_dir) and model_type != 'snapshot':
+            # delete old saving
             for f in os.listdir(save_dir):
-                os.remove(os.path.join(save_dir, f))
-        self.model.save_weights(os.path.join(save_dir, save_name))
+                if not f.startswith(model_type):
+                    continue
+                if f.startswith(save_name):
+                    continue
+                fpath = os.path.join(save_dir, f)
+                try:
+                    if os.path.isfile(fpath):
+                        os.remove(fpath)
+                except:
+                    print('failed delete: ', fpath)
         print('Model saved at Step {:d}, Epoch {:d}'.format(self.training_step, self.training_epoch))
         self.config.save(os.path.join(self.model_dir, 'config.pkl'))
 
@@ -370,7 +401,7 @@ class ModelBase(object):
         #         return self.loss_fns['flow'](flow_gt, out, mask) * self.config.flow_weight
         #     else:
         #         return self.loss_fns['flow'](flow_gt, out) * self.config.flow_weight
-        elif module in ['embedding', 'layered_embedding']:
+        elif module == 'embedding':
             loss = self.loss_fns[module](ds_frame['instance'], out, ds_frame['adj_matrix'])
         else:
             loss = self.loss_fns[module](ds_frame[module], out)
@@ -393,8 +424,8 @@ class ModelBase(object):
         return loss, module_losses, outs
 
 
-    def train(self, train_data, validation_data=None, epochs=None, batch_size=None,
-              augmentation=True, image_summary=True, clear_best_val=False):
+    def train(self, train_data, validation_data=None, epochs=None, batch_size=None, augmentation=True, 
+              image_summary=True, clear_best_val=False):
         '''
         Inputs: 
             train_data/validation_data: a dict of numpy array {'image': ..., 'instance': ..., 'foreground': ...} 
@@ -416,7 +447,7 @@ class ModelBase(object):
             train_ds = self.ds_augment(train_ds)
         if self.config.ds_repeat > 1:
             train_ds = train_ds.repeat(self.config.ds_repeat)
-        train_ds = train_ds.shuffle(buffer_size=128).batch(batch_size)
+        train_ds = train_ds.shuffle(buffer_size=self.config.shuffle_buffer).batch(batch_size)
         if validation_data is None or len(validation_data['image']) == 0:
             val_ds = None
         else:
@@ -479,18 +510,6 @@ class ModelBase(object):
                                     if not self.config.embedding_include_bg:
                                         vis_embedding = vis_embedding * tf.cast(tf.reduce_sum(tf.cast(ds_frame['instance'], tf.int32), axis=-1, keepdims=True) > 0, vis_embedding.dtype)
                                         tf.summary.image('embedding_masked_{}-{}'.format(3*i+1, 3*i+3), vis_embedding, step=self.training_step, max_outputs=1)
-                            if 'layered_embedding' in outs_dict.keys():
-                                for i in range(self.config.embedding_dim//3):
-                                    vis_embedding = outs_dict['layered_embedding'][:,:,:,3*i:3*(i+1)]
-                                    tf.summary.image('embedding_{}-{}'.format(3*i+1, 3*i+3), vis_embedding, step=self.training_step, max_outputs=1)
-                                    if not self.config.embedding_include_bg:
-                                        vis_embedding = vis_embedding * tf.cast(tf.reduce_sum(tf.cast(ds_frame['instance'], tf.int32), axis=-1, keepdims=True) > 0, vis_embedding.dtype)
-                                        tf.summary.image('embedding_masked_{}-{}'.format(3*i+1, 3*i+3), vis_embedding, step=self.training_step, max_outputs=1)
-                            # if 'layered_instances' in outs_dict.keys():
-                            #     for i in range(self.config.instance_layers):
-                            #         vis_instance = tf.expand_dims(outs_dict['layered_instances'][:,:,:,i]>0.5, axis=-1)
-                            #         vis_instance = tf.cast(vis_instance, tf.uint8) * 255
-                            #         tf.summary.image('layerd_instance_{}'.format(i), vis_instance, step=self.training_step, max_outputs=1)
             self.training_epoch += 1
 
             if self.training_epoch in self.config.snapshots:
@@ -498,20 +517,26 @@ class ModelBase(object):
 
 
             self.save_weights(model_type='latest')
-            if self.training_epoch >= self.config.validation_start_epoch and val_ds is not None:
-                self.validate(val_ds, save_best=True)
+            if tf.math.is_nan(loss):
+                break
 
-    def predict_raw(self, image, training=False, keep_size=True):
+            if self.training_epoch >= self.config.validation_start_epoch and val_ds is not None:
+                improved = self.validate(val_ds, save_best=True)
+                if not improved and self.config.early_stoping_steps is not None:
+                    if self.training_step - self.best_score_step > self.config.early_stoping_steps:
+                        print("trainig stoped due to no improvement since {} training steps".format(self.config.early_stoping_steps))
+                        break
+                if not improved and self.config.early_stoping_epochs is not None:
+                    if self.training_epoch - self.best_score_epoch > self.config.early_stoping_epochs:
+                        print("trainig stoped due to no improvement since {} training epochs".format(self.config.early_stoping_epochs))
+                        break
+
+    def predict_raw(self, image, training=False):
         
         img = np.squeeze(image)
-        img_sz = img.shape[:2]
         img = image_resize_np([img], (self.config.H, self.config.W))
         img = K.cast_to_floatx(img)
         raw = self.model(img, training=training)
-        if keep_size:
-            raw = [tf.image.resize(m, img_sz) for m in raw]
-            # for i in range(len(raw)):
-            #     raw[i] = tf.image.resize(raw[i], img_sz)
         raw = {m: np.squeeze(o) for m, o in zip(self.modules, raw)}
 
         return raw
@@ -536,20 +561,20 @@ class ModelBase(object):
         instances = None
         post_processing = post_processing if post_processing is not None else self.config.post_processing
 
-        if post_processing == 'layered_embedding':
-            if 'layered_embedding' in raw.keys() and 'foreground' in raw.keys():
-                instances, layered = instance_from_layered_embedding(raw, self.config) # size screening has been done insde 'instance_from_layered_embedding'
+        if post_processing == 'layering':
+            if 'embedding' in raw.keys() and 'foreground' in raw.keys():
+                instances, layered = embedding_layering(raw, self.config) # size screening has been done
                 return instances, layered
+        elif post_processing == 'meanShift':
+            instances, clusters = embedding_meanshift(raw, self.config)
         else:
             pass
         
         # if self.config.post_processing is not set, auto selection
         if instances is None: 
             if len(self.modules) == 1:
-                if 'foreground' in raw.keys():
-                    instances = instance_from_foreground(raw, self.config)
                 if 'embedding' in raw.keys():
-                    instances = instance_from_embedding(raw, self.config)
+                    instances = embedding_meanshift(raw, self.config)
                 if 'edt' in raw.keys():
                     instances = instance_from_edt(raw, self.config)
             
@@ -561,9 +586,14 @@ class ModelBase(object):
                 elif 'foreground' in raw.keys() and 'edt' in raw.keys():
                     instances = instance_from_edt(raw, self.config)
         
-        instances = size_screening(instances, self.config.obj_min_size, self.config.obj_max_size)
+        instances = size_screening(instances, self.config)
+        # instances = fill_gap(instances, raw, self.config)
         if instances is not None and len(instances.shape) == 3:
             instances = instances.astype(np.uint8)
+
+        if post_processing == 'meanShift':
+            clusters = clusters * (instances > 0)
+            raw['clusters'] = clusters.astype(np.uint8)
     
         return instances
 
@@ -607,7 +637,7 @@ class ModelBase(object):
             e = Evaluator(dimension=2, mode='area')
             for ds_frame in val_ds:
                 outs = self.model(ds_frame['image'])
-                instances = self.postprocess({m: o for m, o in zip(self.modules, outs)})
+                instances = self.postprocess({m: o for m, o in zip(self.modules, outs)}, post_processing=self.config.post_processing)
                 if isinstance(instances, tuple):
                     instances = instances[0]
                 instances = np.array(instances)
@@ -638,6 +668,12 @@ class ModelBase(object):
 
         if self.best_score is None:
             self.best_score = score
+            self.best_score_step = self.training_step
+            self.best_score_epoch = self.training_epoch
+            if save_best:
+                self.save_weights(model_type='best')
+            print("First Validation Run! " + disp)
+            return True
 
         if self.validation_mode() == 'loss':
             score_cp, best_score_cp = - score, - self.best_score
@@ -646,18 +682,23 @@ class ModelBase(object):
 
         if score_cp > best_score_cp:
             self.best_score = score
+            self.best_score_step = self.training_step
+            self.best_score_epoch = self.training_epoch
             disp = "Validation Score Improved! " + disp
             if save_best:
                 self.save_weights(model_type='best')
+            improved = True
         else:
             disp = "Validation Score Not Improved! " + disp
+            improved = False
 
         print(disp)
+        return improved
         
-    def predict(self, image):
+    # def predict(self, image, keep_size=True):
         
-        raw = self.predict_raw(image)
-        # post processing
-        instances = self.postprocess(raw)
+    #     raw = self.predict_raw(image)
+    #     # post processing
+    #     instances = self.postprocess(raw)
 
-        return instances
+    #     return instances

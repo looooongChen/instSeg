@@ -11,13 +11,14 @@ class Config(object):
         self.transfer_training = True
 
         self.model_type = MODEL_BASE
-        self.save_best_metric = 'AJI' # 'AJI'/'AP'/
-        # input size
+        # input image size, all images will be resized for input
         self.H = 512
         self.W = 512
         self.image_channel = image_channel
+        # guidance function
+        self.guide_function_period = None # 'cosine'
+        self.guide_function_type = None # a list of period that 
         # image normalization
-        self.positional_padding = None
         self.input_normalization = 'per-image' # 'per-image', 'constant', None
         self.input_normalization_bias = 0
         self.input_normalization_scale = 1
@@ -26,7 +27,7 @@ class Config(object):
         self.backbone = 'uNet' # 'uNet', 'ResNet50', 'ResNet101', 'ResNet152', 'EfficientNetB0' - 'EfficientNetB7'
         self.filters = 64
         self.padding = 'same'
-        self.weight_decay = 1e-5
+        # self.weight_decay = 1e-5
         self.net_normalization = 'batch' # 'batch', None
         self.dropout_rate = 0
         self.up_scaling = 'deConv' # 'deConv', 'bilinear', 'nearest'
@@ -35,23 +36,25 @@ class Config(object):
         self.nstage = 4
         self.stage_conv = 2
 
-        # losses
-        self.loss = {'foreground': 'crossentropy', 
-                     'contour': 'binary_crossentropy', 
-                     'edt': 'mse', 
-                     'flow': 'masked_mse', 
-                     'embedding': 'cos',
-                     'embedding_sigmoid': 'cos', 
-                     'layered_embedding': 'sparse_cos'}
-        self.loss_weights = {'foreground': 1, 'contour': 1, 'edt': 1, 'flow': 1, 'embedding': 1, 'layered_embedding': 1}
-        self.focal_loss_gamma = 2.0
-        self.ce_neg_ratio = 2
-        self.sensitivity_specificity_loss_beta = 1.0
+        # outputs
+        self.modules = ['foreground', '']
         
-        self.post_processing = 'layered_embedding'
+        # postprocessing
+        self.post_processing = None # processing used to get final instance segmentation, if None, automatically selected
+        self.allow_overlap = True
+
+        # losses
+        self.loss = {'foreground': 'CE', 
+                     'contour': 'CE', 
+                     'edt': 'MSE', 
+                    #  'flow': 'masked_mse', 
+                     'embedding': 'cosine'}
+        self.loss_weights = {'foreground': 1, 'contour': 1, 'edt': 1, 'flow': 1, 'embedding': 1}
+        self.focal_loss_gamma = 2.0
+        self.neg_ratio = 2 # the proportion of negative pixels will be included in the training, for unblanced forground
 
         ## semantic segmentation
-        self.classes = 2
+        # self.classes = 2
 
         ## foreground module
         self.thres_foreground = 0.5
@@ -70,16 +73,13 @@ class Config(object):
         
         ## embedding loss
         self.embedding_dim = 8
+        self.embedding_activation = 'sigmoid' 
         self.embedding_include_bg = False
+        self.embedding_regularization = 0
         self.dynamic_weighting = True
-        self.neighbor_distance = 10
-        # self.positional_embedding = None # 'global', 'harmonic'
-        # self.octave = 4
-        self.emb_clustering = 'meanshift'
-        
-        ## layered instances
-        self.instance_layers = 8
-        self.layering = 'embedding'
+        self.neighbor_distance = 15 # if None, global constraint applies
+        self.margin_attr = 0
+        self.margin_rep = 0
         
         # data augmentation
         self.flip = False
@@ -91,7 +91,7 @@ class Config(object):
         self.random_gamma = False
         self.random_gamma_p = 0.2
         self.random_blur = False
-        self.random_blur_p = 0.1
+        self.random_blur_p = 0.2
         self.random_saturation = False
         self.random_saturation_p = 0.2
         self.random_hue = False
@@ -101,56 +101,102 @@ class Config(object):
         self.deform_scale = [16,256]
         self.deform_strength = 0.25
 
-        # training config:
+        # training config
         self.ds_repeat = 1
+        self.shuffle_buffer = 64
         self.train_epochs = 100
-        self.train_batch_size = 3
-        self.train_learning_rate = 1e-4
+        self.train_batch_size = 4
+        self.optimizer = 'RMSprop'
+        self.learning_rate = 1e-4
         self.lr_decay_period = 10000
         self.lr_decay_rate = 0.9
         self.summary_step = 100
 
-        # validation 
+        # validation config
+        self.save_best_metric = 'loss' # 'AJI'/'AP'/'loss'
         self.snapshots = []
-        self.validation_start_epoch = 1
+        self.validation_start_epoch = 10
+        self.early_stoping_steps = None
+        self.early_stoping_epochs = None
 
         # post-process
-        # object filtering
         self.obj_min_edt = 2
-        self.obj_min_size=0
-        self.obj_max_size=float('inf')
+        self.obj_min_size = 0
+        self.obj_max_size = float('inf')
 
-        
     
     def save(self, path):
         if path.endswith('.pkl'):
             with open(path, 'wb') as output:
                 pickle.dump(self, output, pickle.HIGHEST_PROTOCOL)
 
-# for back compatability
+    def info(self):
+        text = '==== model config summary ===='
+        print(text)
+        # print('[INFO] model backbone: {}'.format(self.backbone))
+        # print('[INFO] prediction branches: {}'.format(','.join(self.modules)))
+        # print('[INFO] {} guidance function used with periods {}'.format(self.guide_function_type, ','.join(self.guide_function_period)))
+        for k in dir(self):
+            if k.startswith('__'):
+                continue
+            if k in ['info', 'save', 'exp_name']:
+                continue
+            line = '[INFO] {}: {}'.format(k, getattr(self, k)) 
+            print(line)
+            text = text + '\n' + line 
+        return text
+
+
+
+    
+    def exp_name(self, preffix=None, suffix=None):
+
+        # model
+        arch = self.backbone 
+        if self.backbone.lower() == 'unet':
+            arch = arch + str(self.nstage) + 'f' + str(self.filters)
+        arch = arch + self.up_scaling
+        name = arch
+
+
+        if 'embedding' in self.modules:
+            # ouput
+            out = 'D'+str(self.embedding_dim)+self.embedding_activation
+            name = name + '_' + out
+            # loss
+            loss = self.loss['embedding']
+            if self.neighbor_distance is None:
+                loss = loss + 'Global'
+            if self.embedding_include_bg:
+                loss = loss + 'Bg'
+            if self.margin_attr > 0:
+                loss = loss + 'Ma{:.2}'.format(float(self.margin_attr))
+            if self.margin_rep > 0:
+                loss = loss + 'Mp{:.2}'.format(float(self.margin_rep))
+            if self.embedding_regularization > 0:
+                loss = loss + 'Reg'
+            if self.dynamic_weighting:
+                loss = loss + 'Dy'
+            name = name + '_' + loss
+
+        # # optimizer
+        # optimizer = self.optimizer + str(self.learning_rate)+'decay'+str(self.lr_decay_rate)
+        # name = name + '_' + optimizer
+        # postprocessing
+        if self.post_processing is not None:
+            name = name + '_' + self.post_processing
+        if isinstance(preffix, str) and len(preffix) != 0:
+            name = preffix + '_' + name
+        if isinstance(suffix, str) and len(suffix) != 0:
+            name = name + '_' + suffix
+        if self.guide_function_type is not None and self.guide_function_period is not None:
+            period = [str(p) for p in self.guide_function_period]
+            name = name + '_cood' + '-'.join(period)
+        
+        return name
+
+
+# for backwards compatability
 ConfigCascade = Config
 ConfigParallel = Config
-
-# class ConfigContour(Config):
-
-#     def __init__(self, image_channel=3):
-#         super().__init__(image_channel=image_channel)
-
-# class ConfigCascade(Config):
-
-#     def __init__(self, image_channel=3):
-#         super().__init__(image_channel=image_channel)
-#         self.model_type = MODEL_CASCADE
-#         self.modules = ['foreground', 'edt', 'embedding']
-#         # config feature forward
-#         self.feature_forward_dimension = 32
-#         self.feature_forward_normalization = 'z-score' # 'z-score', 'l2'
-#         self.stop_gradient = True
-
-# class ConfigParallel(Config):
-
-#     def __init__(self, image_channel=3):
-#         super().__init__(image_channel=image_channel)
-#         self.model_type = MODEL_PARALLEL
-#         self.modules = ['foreground', 'edt']
 

@@ -5,7 +5,6 @@ import cv2
 from skimage.measure import regionprops
 from skimage.measure import label as relabel
 from skimage.morphology import skeletonize
-from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
 from instSeg.constant import * 
 # MAX_OBJ_ADJ_MATRIX = 10
@@ -58,7 +57,8 @@ def trim_images(images, sz, interpolation='bilinear', process_disp=True):
             if m.shape[0] == sz[0] and m.shape[1] == sz[1]:
                 images_trimmed.append(m)
             else:
-                images_trimmed.append(cv2.resize(m, (sz[1], sz[0]), interpolation=interpolation)) 
+                images_trimmed.append(cv2.resize(m, (sz[1], sz[0]), interpolation=interpolation))
+            m = images_trimmed[-1]
         images_trimmed = np.array(images_trimmed)
     else:
         images = image_resize_np(images, sz, method=interpolation)
@@ -74,6 +74,8 @@ def trim_instance_label(masks, sz, process_disp=True):
             - list of instance masks: [[img1_obj1, img1_obj2, ...], [img2_obj1, img2_obj2, ...], ...]
             - list of instance masks: [mask1, mask2, ...]
             - numpy array: nothing changed
+        return:
+            numpy array: #images x H x W x #objects or #images x H x W x 1
     '''
     if isinstance(masks, list) and isinstance(masks[0], list):
         obj_max = np.max([len(M) for M in masks])
@@ -121,24 +123,31 @@ def labeled_instance(masks, overlap_label=0):
     return L
 
 
-def adj_matrix(labels, radius):
+def adj_matrix(labels, radius=None, progress_bar=True, max_obj=MAX_OBJ_ADJ_MATRIX):
     
     '''
     backgrounb: 0
     Args:
-        labels: label map of size B x H x W x 1 or B x H x W or B x H x W x # objects
+        labels: label map of size B x H x W x (1) or B x H x W or B x H x W x # objects
         radius: radius to determine neighbout relationship
     '''
-    if radius < 1:
-        radius = int(max(labels.shape[1:]) * radius)
-    D = disk_np(radius//2)
+    if radius is not None:
+        if radius < 1:
+            radius = int(max(labels.shape[1:]) * radius)
+        D = disk_np(radius//2)
+    else:
+        adjs = np.ones((len(labels), max_obj, max_obj), bool)
+        return adjs
+
     labels = labels.astype(np.int16)
     if len(labels.shape) == 3:
         labels = np.expand_dims(labels, axis=-1)
 
     adjs = []
-    pbar = tqdm(labels, desc='Adjacent matrix:', ncols=100)
+    pbar = tqdm(labels, desc='Adjacent matrix:', ncols=100) if progress_bar else labels
     for l in pbar:
+        adj = np.zeros((max_obj, max_obj), bool)
+        
         if l.shape[-1] == 1:
             label_stack = np.zeros((max(np.unique(l))+1, *l.shape[:2]), dtype=np.uint8)
             X, Y = np.meshgrid(np.arange(0, l.shape[0]), np.arange(0, l.shape[1]), indexing='ij')
@@ -147,17 +156,25 @@ def adj_matrix(labels, radius):
             label_stack = np.moveaxis(l, -1, 0) > 0
             label_stack = np.pad(label_stack, ((1,0),(0,0),(0,0)), mode='constant', constant_values=0)
             label_stack = label_stack.astype(np.uint8)
-
-        for i in range(label_stack.shape[0]):
-            label_stack[i] = cv2.dilate(label_stack[i], D, iterations = 1)
         
-        adj = np.zeros((MAX_OBJ_ADJ_MATRIX, MAX_OBJ_ADJ_MATRIX), bool)
-        for i in range(label_stack.shape[0]):
-            idx_r, idx_c = np.nonzero(label_stack[i])
-            if len(idx_r) > 0:
-                neighbor = np.any(label_stack[:, idx_r, idx_c], axis=1)
-                adj[i, :len(neighbor)] = neighbor
-                adj[:len(neighbor), i] = neighbor
+        if radius is None:
+            idx = np.sum(label_stack, axis=(1,2)) == 0
+            idx = np.pad(idx, (0, max_obj-len(idx)), mode='constant', constant_values=True)
+            adj[:,:] = True
+            adj[idx, :] = False
+            adj[:, idx] = False
+        else:
+            for i in range(label_stack.shape[0]):
+                xx, yy = np.nonzero(D)
+                label_stack[i] = cv2.dilate(label_stack[i], D, iterations = 1)
+            
+            for i in range(label_stack.shape[0]):
+                idx_r, idx_c = np.nonzero(label_stack[i])
+                if len(idx_r) > 0:
+                    neighbor = np.any(label_stack[:, idx_r, idx_c], axis=1)
+                    adj[i, :len(neighbor)] = neighbor
+                    adj[:len(neighbor), i] = neighbor
+        
         adj[0,:] = True
         adj[:,0] = True
         adjs.append(adj)
@@ -265,21 +282,26 @@ def layered2stack(layered):
     instances = np.moveaxis(np.array(instances), 0, -1)
     return instances
 
-def size_screening(instances, obj_min_size, obj_max_size):
-    if obj_min_size > 0 or obj_max_size < float('inf'):
-        if isinstance(instances, list):
-            sz = [np.sum(obj) for obj in instances]
-            instances = [obj for s, obj in zip(sz, instances) if s > obj_min_size and s < obj_max_size]
-        elif len(instances.shape) == 2:
-            for r in regionprops(instances):
-                if r.area <obj_min_size or r.area > obj_max_size:
-                    instances[r.coords[:,0], r.coords[:,1]] = 0
-        elif len(instances.shape) == 3:
-            sz = np.apply_over_axes(np.sum, instances>0, [1,2])
-            sz = np.squeeze(np.squeeze(sz, axis=1), axis=1)
-            idx = np.logical_and(sz > obj_min_size, sz < obj_max_size)
-            instances = instances[idx]
-    return instances
+def labeled_non_overlap(labels):
+    '''
+    overlap region marked as zero
+    backgrounb: 0
+    Args:
+        labels: #images x H x W x #objects or #images x H x W x 1
+    return:
+        labele: #images x H x W x 1
+    '''
+
+    if labels.shape[-1] == 1:
+        return labels
+    else:
+        labels = labels > 0
+        S = np.sum(labels, axis=-1, keepdims=True)  
+        non_overlap = S == 1
+        labeled = np.sum(labels * np.expand_dims(np.arange(labels.shape[-1])+1, axis=(0,1,2)), axis=-1, keepdims=True)
+        labeled = labeled * non_overlap
+        return labeled
+
 
 
 if __name__ == '__main__':
@@ -345,13 +367,25 @@ if __name__ == '__main__':
     # labeled[0,:4,:4] = 1
     # labeled[0,:4,-4:] = 3
 
-    labeled = np.zeros((1,10,10,5))
-    labeled[0,:4,:4,0] = 1
-    labeled[0,:4,-4:,3] = 1
+    # labeled = np.zeros((1,10,10,5))
+    # labeled[0,:4,:4,0] = 1
+    # labeled[0,:4,-4:,3] = 1
+    # labeled[0,9,9,2] = 1
 
-    adj = adj_matrix(labeled,3)
-    print(adj)
+    # adj = adj_matrix(labeled,radius=None)
+    # print(adj[0, :6, :6])
 
-    L = labeled_instance(labeled, overlap_label=0)
-    print(L[0,:,:,0])
+    # L = labeled_instance(labeled, overlap_label=0)
+    # print(L[0,:,:,0])
+
+    ## non overlap test
+
+    labels = np.zeros((1,10,10,5))
+    labels[0,:6,:6,0] = 1
+    labels[0,-6:,-6:,1] = 1
+    labels[0,0,9,4] = 1
+
+    labeled =  labeled_non_overlap(labels)
+    print(labeled.shape)
+    print(labeled[0,:,:,0])
 

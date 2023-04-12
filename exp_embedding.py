@@ -9,7 +9,7 @@ from PNS import read_pns_cyst, read_patches
 import random
 import csv
 
-random.seed(1)
+
 
 parser = argparse.ArgumentParser()
 
@@ -21,19 +21,31 @@ parser.add_argument('--model_dir', default='./models_elastic/model_scale128_stre
 parser.add_argument('--backbone', default='unet', help='')
 parser.add_argument('--nstage', default=4, help='nstage')
 parser.add_argument('--filters', default=32, help='nstage')
+parser.add_argument('--coord_type', default=None, help='coord type')
+parser.add_argument('--coord_period', default=64)
 parser.add_argument('--dynamic_weighting', action=argparse.BooleanOptionalAction)
-parser.add_argument('--steps', default=10000, help='training steps')
+parser.add_argument('--steps', default=5000, help='training steps')
 parser.add_argument('--upscale', default='deConv', help='training steps')
-
-parser.add_argument('--scale', default=1, help='scale')
+parser.add_argument('--training_examples', default=100, help='training steps')
+parser.add_argument('--test_examples', default=10, help='training steps')
+parser.add_argument('--augmentation', action=argparse.BooleanOptionalAction)
+parser.add_argument('--grid', default=64, help='grid')
 parser.add_argument('--radius', default=18, help='radius')
 
 batch_size = 4
 mode = 'layered_embedding'
 args = parser.parse_args()
 model_dir = args.model_dir
-scale = int(args.scale)
 radius = int(args.radius)
+training_examples = int(args.training_examples)
+test_examples = int(args.test_examples)
+grid = int(args.grid)
+augmentation = False if args.augmentation is None else True
+
+if args.command == 'train':
+    random.seed(1)
+else:
+    random.seed(2)
 
 g_config = instSeg.GeneratorConfig()
 
@@ -41,26 +53,38 @@ g_config = instSeg.GeneratorConfig()
 g_config.obj_color = (254, 208, 73)
 g_config.bg_color = (0,0,0)
 
-g_config.img_sz = (64*8*scale, 64*8*scale)
-# g_config.img_sz = (64*6*scale, 64*6*scale)
-g_config.grid_sz = (64*scale, 64*scale)
-g_config.obj_spec = {'ellipse': {'major': radius*scale, 'minor': round(radius*scale/3)}}
-g_config.obj_shape = 'ellipse'
-if args.exp == 'grid_ellipse':
-    g_config.type = 'grid'
-    g_config.obj_rotation = False
-if args.exp == 'grid_circle' or args.exp == 'grid_offset':
-    g_config.obj_spec = {'circle': {'radius': radius * scale}}
+g_config.img_sz = (64*8, 64*8)
+g_config.grid_sz = (grid, grid)
+if args.exp == 'grid' or args.exp == 'grid_offset' or args.exp == 'grid_translate' or args.exp == 'grid_rotation':
+    if args.exp == 'grid':
+        eval_count = 1 
+    else:
+        eval_count = test_examples
+    g_config.obj_spec = {'circle': {'radius': radius}}
     g_config.obj_shape = 'circle'
     g_config.type = 'grid'
-    g_config.obj_rotation = False
+    
+    if args.exp == 'grid_translate':
+        g_config.grid_translation = True
+    else:    
+        g_config.grid_translation = False
+    
+    if args.exp == 'grid_rotation':
+        g_config.grid_rotation = True
+    else:    
+        g_config.grid_rotation = False
+
     if args.exp == 'grid_offset':
         g_config.obj_translation = 4
-elif args.exp == 'grid_rotated':
+elif args.exp == 'grid_ellipse':
+    g_config.obj_spec = {'ellipse': {'major': radius, 'minor': round(radius/3)}}
+    g_config.obj_shape = 'ellipse'
+    eval_count = test_examples
     g_config.type = 'grid'
     g_config.obj_rotation = 30
 elif args.exp == 'pair' or args.exp == 'quartet':
-    g_config.obj_spec = {'circle': {'radius': radius*scale}}
+    eval_count = test_examples
+    g_config.obj_spec = {'circle': {'radius': radius}}
     g_config.obj_shape = 'circle'
     g_config.type = args.exp
     g_config.obj_rotation = False
@@ -86,7 +110,7 @@ if args.command == 'train':
     if args.exp == 'quartet':
         config.neighbor_distance = g_config.grid_sz[0] * 3
     else:
-        config.neighbor_distance = int(g_config.grid_sz[0] * 1.5 * scale)
+        config.neighbor_distance = int(g_config.grid_sz[0] * 1.4)
     
     config.loss[mode] = 'cos'
     config.embedding_include_bg = False
@@ -100,12 +124,24 @@ if args.command == 'train':
     config.up_scaling = args.upscale
     config.net_normalization = 'batch'
     config.dropout_rate = 0
+    config.random_shift = False
+
+    if args.coord_type is not None:
+        if args.coord_type == 'bandS':
+            config.coord_type = 'cosine'
+            config.coord_period = [32, 64, 128]
+        elif args.coord_type == 'bandM':
+            config.coord_type = 'cosine'
+            config.coord_period = [32, 48, 64, 96, 128]
+        else:
+            config.coord_type = args.coord_type
+            config.coord_period = int(args.coord_period)
 
     ## training data setting
 
     ## load dataset
     X_train, y_train = [], []
-    for idx in range(100):
+    for idx in range(training_examples):
         img = g.generate()
         X_train.append(img)
         mask = relabel(img[:,:,0] > 0)
@@ -115,7 +151,7 @@ if args.command == 'train':
     epoches = int(int(args.steps)/(len(X_train)/batch_size)) + 1
     
     model = instSeg.Model(config=config, model_dir=args.model_dir)
-    model.train(ds_train, None, batch_size=batch_size, epochs=epoches, augmentation=False)
+    model.train(ds_train, None, batch_size=batch_size, epochs=epoches, augmentation=augmentation)
 
 
 if args.command == 'eval':
@@ -138,31 +174,30 @@ if args.command == 'eval':
         if not os.path.exists(os.path.join(model_dir, 'visulization')):
             os.makedirs(os.path.join(model_dir, 'visulization'))
 
-        for idx in range(10):
+        Consistency, Distinctiveness, error, total = [], [], [], []
+        for idx in range(eval_count):
             img = g.generate()
             # cv2.imwrite(os.path.join(model_dir, 'visulization', 'img_{}.png'.format(idx)), img.astype(np.uint8))
             embedding = model.predict_raw(img)[mode]
             embedding = np.squeeze(embedding)
-            # embedding = embedding[1::2,1::2,:]
-            # img = img[1::2,1::2,:]
-            
-            H, W = embedding.shape[0], embedding.shape[1]
-            rr, cc = np.nonzero(img[:,:,0] > 0)
-            embedding = embedding[rr, cc, :]
-            embedding = embedding/np.sqrt(np.sum(embedding**2, axis=1, keepdims=True))
 
-            t = time.time()
-            reducer = umap.UMAP(n_neighbors=50, min_dist=0, n_components=3)
-            embedding = reducer.fit_transform(embedding)
-            embedding = (embedding - embedding.min())/(embedding.max() - embedding.min()) * 255
-            print(time.time() - t)
+            consistency, distinctiveness = instSeg.result_analyse.embedding_analysis(relabel(img[:,:,0] > 0), embedding, metric='cos', radius=int(int(g_config.grid_sz[0] * 1.4)))
+            N_false = instSeg.result_analyse.false_merge(distinctiveness, thres=45/180*3.1415)
+            Consistency = Consistency + list(consistency.values())
+            rr, cc = np.nonzero(distinctiveness != float('inf'))
+            Distinctiveness = Distinctiveness + list(distinctiveness[rr, cc])
+            error.append(N_false)
+            total.append(len(distinctiveness))
 
-            vis = np.zeros((H, W, 3))
-            vis[rr, cc, :] = embedding
-            
-            cv2.imwrite(os.path.join(model_dir, 'visulization', 'vis_{}.png'.format(idx)), vis.astype(np.uint8))
+            print("test{}: {}".format(idx, N_false))
+            if idx < 10:
+                vis = instSeg.result_analyse.visualize_embedding(embedding, mask=img[:,:,0] > 0, metric='cos')
+                cv2.imwrite(os.path.join(model_dir, 'visulization', 'vis_{}.png'.format(idx)), vis.astype(np.uint8))
 
 
+        lines = ['Consistency: {}'.format(np.mean(Consistency)), 'Distinctiveness: {}'.format(np.mean(Distinctiveness)), 'errors: {}/{}'.format(np.sum(error), np.sum(total))]
+        with open(os.path.join(model_dir, 'eval.txt'), 'w') as f:
+            f.write('\n'.join(lines))
 
 
 
