@@ -159,161 +159,13 @@ class Sample(object):
         if thres is None:
             return None
         if thres not in self.matches.keys():
-            if self.allow_overlap or thres < 0.5:
+            if self.allow_overlap or thres <= 0.5:
                 pass
             else:
                 self.matches[thres] = self.jaccard > thres
         assert np.sum(self.matches[thres]) == np.count_nonzero(self.matches[thres])
         return self.matches[thres]
 
-    # def _getSegPrecision(self, subject='pred'):
-
-    #     '''
-    #     compute the segmentation precision of each 'subject' object
-    #     '''
-    #     if subject == 'pred' and self.precision_pd is None:    
-    #         self._intersection('pred')
-    #         self.precision_pd = {k: self.intersection_pd[k] / self.S_pd[k] for k in self.match_pd.keys()}
-
-    #     if subject == 'gt' and self.precision_gt is None:    
-    #         self._intersection('gt')
-    #         self.precision_gt = {k: self.intersection_gt[k] / self.S_gt[k] for k in self.match_gt.keys()}
-
-
-    # def _getSegRecall(self, subject='pred'):
-
-    #     '''
-    #     compute the segmentation recall of each 'subject' object
-    #     '''
-    #     if subject == 'pred' and self.recall_pd is None:    
-    #         self._intersection('pred')
-    #         self.recall_pd = {}
-    #         for k, m in self.match_pd.items():
-    #             self.recall_pd[k] = self.intersection_pd[k] / self.S_gt[m] if m is not None else 0
-
-    #     if subject == 'gt' and self.recall_gt is None:    
-    #         self._intersection('gt')
-    #         self.recall_gt = {}
-    #         for k, m in self.match_gt.items():
-    #             self.recall_gt[k] = self.intersection_gt[k] / self.S_pd[m] if m is not None else 0
-
-
-    # def _getSegF1(self, subject='pred'):
-    #     '''
-    #     compute the segmentation f1 score of each 'subject' object
-    #     '''
-    #     self._getSegPrecision(subject)
-    #     self._getSegRecall(subject)
-
-    #     if subject == 'pred' and self.f1_pd is None:
-    #         self.f1_pd = {}
-    #         for k, p in self.precision_pd.items():
-    #             self.f1_pd[k] = 2*(p*self.recall_pd[k])/(p + self.recall_pd[k] + 1e-8)
-
-    #     if subject == 'gt' and self.f1_gt is None:
-    #         self.f1_gt = {}
-    #         for k, p in self.precision_gt.items():
-    #             self.f1_gt[k] = 2*(p*self.recall_gt[k])/(p + self.recall_gt[k] + 1e-8)
-    
-
-    # def _getSegJaccard(self, subject='pred'):
-
-    #     '''
-    #     compute the segmentation Jaccard index of each 'subject' object
-    #     '''
-    #     self._intersection(subject)
-        
-    #     if subject == 'pred' and self.jaccard_pd is None:
-    #         match, intersection = self.match_pd, self.intersection_pd
-    #         area_sub, area_ref = self.S_pd, self.S_gt
-    #     elif subject == 'gt' and self.jaccard_gt is None:
-    #         match, intersection = self.match_gt, self.intersection_gt
-    #         area_sub, area_ref = self.S_gt, self.S_pd
-    #     else:
-    #         return None
-
-    #     jaccard = {}
-    #     for k, m in match.items():
-    #         union = area_sub[k] - intersection[k]
-    #         if m is not None:
-    #             union += area_ref[m]
-    #         jaccard[k] = intersection[k] / union
-        
-    #     if subject == 'pred':
-    #         self.jaccard_pd = jaccard
-    #     else:
-    #         self.jaccard_gt = jaccard
-
-
-    # def _getSegDice(self, subject='pred'):
-        
-    #     '''
-    #     compute the segmentation Dice index of each 'subject' object
-    #     '''
-    #     self._intersection(subject)
-
-    #     if subject == 'pred' and self.dice_pd is None:
-    #         match, intersection = self.match_pd, self.intersection_pd
-    #         area_sub, area_ref = self.S_pd, self.S_gt
-    #     elif subject == 'gt' and self.dice_gt is None:
-    #         match, intersection = self.match_gt, self.intersection_gt
-    #         area_sub, area_ref = self.S_gt, self.S_pd
-    #     else:
-    #         return None
-
-    #     dice = {}
-    #     for k, m in match.items():
-    #         agg_area = area_sub[k] + area_ref[m] if m is not None else area_sub[k]
-    #         dice[k] = 2 * intersection[k] / agg_area
-        
-    #     if subject == 'pred':
-    #         self.dice_pd = dice
-    #     else:
-    #         self.dice_gt = dice
-        
-
-    # def averageSegPrecision(self, subject='pred'):
-
-    #     '''
-    #     average of the segmentation precision of each 'subject' object
-    #     '''
-    #     if self.mode == 'centroid':
-    #         raise Exception("averageSegPrecision is not a valid score in 'centroid' mode")
-
-    #     self._getSegPrecision(subject)
-    #     if subject == 'pred':
-    #         return np.mean(list(self.precision_pd.values()))
-    #     else:
-    #         return np.mean(list(self.precision_gt.values()))
-
-
-    # def averageSegRecall(self, subject='pred'):
-
-    #     '''
-    #     average of the segmentation recall of each 'subject' object
-    #     '''
-    #     if self.mode == 'centroid':
-    #         raise Exception("averageSegRecall is not a valid score in 'centroid' mode")
-        
-    #     self._getSegRecall(subject)
-    #     if subject == 'pred':
-    #         return np.mean(list(self.recall_pd.values()))
-    #     else:
-    #         return np.mean(list(self.recall_gt.values())) 
-             
-
-    # def averageSegF1(self, subject='pred'):
-    #     '''
-    #     average of the segmentation F1 score of each 'subject' object
-    #     '''
-    #     if self.mode == 'centroid':
-    #         raise Exception("averageSegF1 is not a valid score in 'centroid' mode")
-        
-    #     self._getSegF1(subject)
-    #     if subject == 'pred':
-    #         return np.mean(list(self.f1_pd.values()))
-    #     else:
-    #         return np.mean(list(self.f1_gt.values()))
         
     def averageDice(self, thres=None, subject='pd'):
         max_axis = 1 if subject == 'pd' else 0
@@ -330,15 +182,12 @@ class Sample(object):
         '''
         self._intersection()
         idx = np.argmax(self.intersection, axis=0)
-
-        C = np.sum(self.intersection[idx, list(range(self.N_gt))])
-        U = np.sum(self.S_gt) + np.sum(self.S_pd[idx]) - C + np.sum(self.S_pd[list(set(range(self.N_pd))-set(idx))])
-        print(np.sum(self.S_gt) + np.sum(self.S_pd[idx]) - C)
-        print(np.sum(self.S_gt), np.sum(self.S_pd[idx]))
-        print(list(set(range(self.N_pd))-set(idx)))
-        print(np.sum(self.S_pd[list(set(range(self.N_pd))-set(idx))]))
-
-        print(idx, C, U)
+        idx_e = self.intersection[idx, list(range(self.N_gt))] > 0
+        idx_pd, idx_gt = idx[idx_e], np.array(range(self.N_gt))[idx_e]
+        
+        
+        C = np.sum(self.intersection[idx_pd, idx_gt])
+        U = np.sum(self.S_gt) + np.sum(self.S_pd[idx_pd]) - C + np.sum(self.S_pd[list(set(range(self.N_pd))-set(idx))])
 
         return 1 if (C == 0 and U == 0) else C/U
     
@@ -437,49 +286,47 @@ class Sample(object):
         return self.SQ() * self.RQ(thres=0.5)
 
 
-class GFG(object):   
+class MBM_Solver(object):   
     # maximal Bipartite matching. 
     def __init__(self, graph): 
           
         self.graph = graph
         # number of applicants  
-        self.ppl = len(graph)
+        self.persons = len(graph)
         # number of jobs 
         self.jobs = len(graph[0]) 
   
-    # A DFS based recursive function 
-    # that returns true if a matching  
-    # for vertex u is possible 
-    def bpm(self, u, matchR, seen): 
+    # A DFS based recursive function that returns true if a matching for vertex u is possible 
+    def bpm(self, u, match, seen): 
         for v in range(self.jobs): 
             # If applicant u is interested in job v and v is not seen 
             if self.graph[u][v] and seen[v] == False: 
                 seen[v] = True 
-                '''If job 'v' is not assigned to 
-                   an applicant OR previously assigned  
-                   applicant for job v (which is matchR[v])  
-                   has an alternate job available.  
-                   Since v is marked as visited in the  
-                   above line, matchR[v]  in the following 
-                   recursive call will not get job 'v' again'''
-                if matchR[v] == -1 or self.bpm(matchR[v], matchR, seen): 
-                    matchR[v] = u 
-                    return True, v
+                # If job 'v' is not assigned to an applicant OR previously assigned applicant for job v (which is match[v]) has an alternate job available.  
+                # Since v is marked as visited in the above line, match[v]  in the following recursive call will not get job 'v' again
+                if match[v] == -1 or self.bpm(match[v], match, seen): 
+                    match[v] = u 
+                    return True
         return False
     
     def maxBPM(self): 
         ''' returns maximum number of matching ''' 
         # applicant number assigned to job i, the value -1 indicates nobody is assigned
-        matchR = [-1] * self.jobs   
+        match = [-1] * self.jobs   
         # Count of jobs assigned to applicants 
-        result = 0 
-        for i in range(self.ppl): 
+        N_match = 0 
+        for i in range(self.persons): 
             # Mark all jobs as not seen for next applicant. 
             seen = [False] * self.jobs 
             # Find if the applicant 'u' can get a job 
-            if self.bpm(i, matchR, seen): 
-                result += 1
-        return result, matchR 
+            if self.bpm(i, match, seen): 
+                N_match += 1
+        match_mx = np.zeros((self.persons, self.jobs), bool)
+        for idx_job, idx_person in enumerate(match):
+            if idx_person == -1:
+                continue
+            match_mx[idx_person, idx_job] = True 
+        return N_match, match_mx
 
 class Evaluator(object):
 
@@ -562,26 +409,6 @@ class Evaluator(object):
     def mADS(self):
         return self.meanAggregatedDice()
 
-    def aggregatedDice(self):
-        ''' 
-        no defination found, derived from aggregated Jaccard Index
-        Reference:
-            CNN-BASED PREPROCESSING TO OPTIMIZE WATERSHED-BASED CELL SEGMENTATION IN 3D CONFOCAL MICROSCOPY IMAGES
-        aggregatedDice: accumulate area over images first, then compute the ADS
-        meanAggregatedDice: compute ADS of each image, and then take the average
-        '''
-        if self.mode == 'centroid':
-            raise Exception("aggregatedDice is not a valid score in 'centroid' mode")
-
-        agg_intersection, agg_area = 0, 0
-        for e in self.examples:
-            agg_i, _, agg_a = e.accumulate_area()
-            agg_intersection += agg_i
-            agg_area += agg_a
-        if self.verbose:
-            print('aggregated Dice: ', 2*agg_intersection/agg_area)
-
-        return 2*agg_intersection/agg_area
 
     def ADS(self):
         return self.aggregatedDice()
@@ -798,31 +625,32 @@ if __name__ == '__main__':
     # gt = imread('./test/toy_example/gt.png')
     # pred = imread('./test/toy_example/pred.png')
     
-    sample = Sample(pred, gt, mode='area')
+    # sample = Sample(pred, gt, mode='area')
 
-    sub = 'pd'
-    thres = 0.5
-    sample._intersection()
-    print(sample.intersection)
-    # print(sample.dice)
-    print(sample.jaccard)
-    m = sample._match(0.6)
-    print('averageJaccard', sample.averageJaccard(subject=sub))
-    print('averageDice', sample.averageDice(subject=sub))
-    print('aggregatedJaccard', sample.aggregatedJaccard())
-    print('detection recall', sample.detectionRecall(thres))
-    print('detection precision', sample.detectionPrecision(thres))
+    # sub = 'pd'
+    # thres = 0.5
+    # sample._intersection()
+    # print(sample.intersection)
+    # # print(sample.dice)
+    # print(sample.jaccard)
+    # m = sample._match(0.5)
+    # print(sample.matches[0.5])
+    # print('averageJaccard', sample.averageJaccard(subject=sub))
+    # print('averageDice', sample.averageDice(subject=sub))
+    # print('aggregatedJaccard', sample.aggregatedJaccard())
+    # print('detection recall', sample.detectionRecall(thres))
+    # print('detection precision', sample.detectionPrecision(thres))
 
 
-    # print('COCO AP', sample.AP_COCO())
-    # print('average false negative ratio', sample.AFNR())
-    print('DSB P', sample.P_DSB(thres=0.5))
-    print('DSB P', sample.P_DSB(thres=0.6))
-    print('DSB P', sample.P_DSB(thres=0.7))
-    print('DSB AP', sample.AP_DSB())
-    print('RQ', sample.RQ())
-    print('SQ', sample.SQ())
-    print('PQ', sample.PQ())
+    # # print('COCO AP', sample.AP_COCO())
+    # # print('average false negative ratio', sample.AFNR())
+    # print('DSB P', sample.P_DSB(thres=0.5))
+    # print('DSB P', sample.P_DSB(thres=0.6))
+    # print('DSB P', sample.P_DSB(thres=0.7))
+    # print('DSB AP', sample.AP_DSB())
+    # print('RQ', sample.RQ())
+    # print('SQ', sample.SQ())
+    # print('PQ', sample.PQ())
 
 
 
@@ -844,3 +672,16 @@ if __name__ == '__main__':
     # e.AFNR()
     # e.AJI()
     # e.ADS()
+
+    ## matching
+
+    bg = [[0,1,1,0,0,0],
+          [1,0,0,1,0,0],
+          [0,0,1,0,0,0],
+          [0,0,1,1,0,0],
+          [0,0,0,0,0,0],
+          [0,0,0,0,0,1]]
+
+    s = MBM_Solver(bg)
+    N_match, match = s.maxBPM()
+    print(match)
